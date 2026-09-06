@@ -9,9 +9,11 @@ RemainAfterExit=yes
 User=nx163
 WorkingDirectory=/home/nx163/youth-vision-runtime
 ExecStart=/home/nx163/youth-vision-runtime/scripts/competition_selected.sh image
+ExecStop=/home/nx163/youth-vision-runtime/scripts/stop_recon_pipeline.sh
 Restart=on-failure
 RestartSec=10
-KillMode=process
+TimeoutStopSec=20
+KillMode=control-group
 
 [Install]
 WantedBy=multi-user.target
