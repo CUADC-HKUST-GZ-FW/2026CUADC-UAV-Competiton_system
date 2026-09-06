@@ -1,0 +1,56 @@
+mission_manager_node:
+  ros__parameters:
+    # FCU identity and stable MAVROS state-link gate.
+    expected_system_id: 1
+    heartbeat_timeout_sec: 2.0
+    heartbeat_required_count: 5
+    heartbeat_stable_duration_sec: 3.0
+    vehicle_info_timeout_sec: 3.0
+    vehicle_info_refresh_sec: 5.0
+
+    # Independent telemetry freshness limits, measured with monotonic time.
+    fcu_state_timeout_sec: 2.0
+    position_timeout_sec: 2.0
+    gps_timeout_sec: 2.0
+    ekf_timeout_sec: 2.0
+    sensor_timeout_sec: 3.0
+    health_check_period_sec: 0.2
+    # Runtime observation faults become DEGRADED after this duration. Pure
+    # companion-side stale data never becomes CRITICAL by duration alone.
+    runtime_degraded_after_sec: 5.0
+
+    # Required positioning checks. Verify the corresponding MAVROS topics on
+    # the installed MAVROS version before real-hardware operation.
+    position_required: true
+    gps_required: true
+    gps_min_fix_type: 3
+    gps_min_satellites: 6
+    gps_max_horizontal_accuracy_m: 10.0
+    ekf_required: true
+
+    # MAV_SYS_STATUS_SENSOR bitmasks. Zero means no extra bitmask requirement.
+    # Configure actual required/optional sensors for the airframe before flight.
+    required_sensor_mask: 0
+    optional_sensor_mask: 0
+    # Add Bool topics published by camera/payload/rangefinder/communication
+    # adapters. Required topics block attack start; optional topics only warn.
+    # ROS 2 Humble cannot infer an array type from an empty YAML list and leaves
+    # the declared parameter uninitialized. The node filters blank entries, so
+    # this sentinel represents an intentionally empty STRING_ARRAY.
+    required_external_health_topics: [""]
+    optional_external_health_topics: [""]
+    serious_system_statuses: [5, 6, 7, 8]
+
+    # A target expires unless explicitly confirmed within this period.
+    target_max_age_sec: 15.0
+
+    # TODO(real deployment): narrow these bounds to the approved flight area.
+    target_min_latitude: -90.0
+    target_max_latitude: 90.0
+    target_min_longitude: -180.0
+    target_max_longitude: 180.0
+
+    state_topic: /mission/safety_state
+    diagnostic_topic: /mission/safety_status
+    target_topic: /vision/target_command
+    task_id_topic: /mission/active_task_id

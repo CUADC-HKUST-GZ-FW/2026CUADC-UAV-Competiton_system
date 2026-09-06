@@ -1,0 +1,8 @@
+float64 latitude
+float64 longitude
+float64 altitude
+float64 acceptance_radius
+float64 heading_deg
+---
+bool success
+string message

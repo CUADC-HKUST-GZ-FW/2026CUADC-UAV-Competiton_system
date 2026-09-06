@@ -1,0 +1,76 @@
+# ArduPlane parameters selected for SITL import
+# Source values are used.
+# Review groups 06, 08, 09 and 11 are intentionally excluded.
+# Format: PARAMETER,SOURCE_VALUE
+
+# ==================================================
+# [IMPORTABLE]
+# ==================================================
+RTL_ALTITUDE,35
+RTL_AUTOLAND,2
+RTL_RADIUS,100
+WP_LOITER_RAD,60
+WP_RADIUS,20
+
+# ==================================================
+# [REVIEW INCLUDED]
+# ==================================================
+
+# Review Group 01: 导航与姿态角限制
+NAVL1_PERIOD,8
+PTCH_LIM_MAX_DEG,30
+PTCH_LIM_MIN_DEG,-30
+
+# Review Group 02: 巡航空速与平飞油门
+AIRSPEED_CRUISE,23
+TRIM_THROTTLE,45
+
+# Review Group 03: 控制增益空速缩放
+SCALING_SPEED,20
+
+# Review Group 04: 横滚控制器
+RLL2SRV_RMAX,0
+RLL2SRV_TCONST,0.5
+RLL_RATE_D,0.003
+RLL_RATE_FF,0.345
+RLL_RATE_FLTD,10
+RLL_RATE_FLTT,3.183099
+RLL_RATE_I,0.15
+RLL_RATE_P,0.08
+
+# Review Group 05: 俯仰控制器
+PTCH2SRV_RMAX_DN,0
+PTCH2SRV_RMAX_UP,0
+PTCH2SRV_TCONST,0.75
+PTCH_RATE_D,0
+PTCH_RATE_FF,0.345
+PTCH_RATE_FLTD,10
+PTCH_RATE_FLTT,2.122066
+PTCH_RATE_I,0.3
+PTCH_RATE_P,0.12
+
+# Review Group 07: 起飞、襟翼和自动降落
+FLAP_1_PERCNT,50
+FLAP_2_PERCNT,100
+LAND_FLAP_PERCNT,50
+LAND_FLARE_AIM,0
+LAND_FLARE_ALT,1.5
+LAND_FLARE_SEC,2
+LAND_PF_ALT,4
+LAND_PF_ARSPD,14
+LAND_PF_SEC,5
+LAND_PITCH_DEG,0
+RNGFND_LANDING,1
+TECS_LAND_ARSPD,14
+TECS_PITCH_MAX,0
+TKOFF_ALT,25
+TKOFF_DIST,50
+TKOFF_LVL_ALT,3
+
+# Review Group 10: MAVLink/MSP 遥测配置
+MSP_OPTIONS,4
+
+# Review Group 12: 其他需人工复核参数
+MIS_TOTAL,14
+STAT_FLTTIME,2575
+

@@ -1,0 +1,7 @@
+# Shared Hikrobot MVS camera capture parameters.
+#
+# Units for all exposure time values are microseconds.
+exposure_auto: continuous
+exposure_time_us: 1000
+auto_exposure_lower_us: 15
+auto_exposure_upper_us: 1500

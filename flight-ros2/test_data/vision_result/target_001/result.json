@@ -1,0 +1,41 @@
+{
+  "target_id": "target_001",
+
+  "frame_path": "target_001/frame.jpg",
+  "crop_path": "target_001/crop_128.jpg",
+
+  "recognition": {
+    "label": "25",
+    "class_id": 25,
+    "confidence": 0.982,
+    "label_consensus": 0.95
+  },
+
+  "coordinate": {
+    "latitude": 22.8829116,
+    "longitude": 113.4880722,
+    "altitude_msl_m": 32.4,
+    "vertical_sigma_m": 0.10,
+    "horizontal_radius_95_m": 0.35
+  },
+
+  "observation_count": 6,
+  "total_observation_count": 7,
+  "observation_span_sec": 0.42,
+
+  "navigation": {
+    "gps_fix_type": 6,
+    "rtk_fixed": true,
+    "rtk_observation_count": 6,
+    "gps_source": "gps1",
+    "position_source": "gps1_rtk_raw",
+    "fusion_mode": "rtk_fixed_only",
+    "attitude_source": "local_pose",
+    "calibration_source": "fov_estimate"
+  },
+
+  "rtk_fixed": true,
+
+  "valid": true,
+  "status": "confirmed"
+}

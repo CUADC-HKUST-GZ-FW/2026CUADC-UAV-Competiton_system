@@ -1,0 +1,30 @@
+# Record vision overlay frames and a 1:1 lat/lon/alt sidecar JSONL.
+# This file does not change youth_vision_runner or uav_ros2_project.
+
+geo_bridge_node:
+  ros__parameters:
+    recognition_log: /home/nx163/youth-vision-runtime/logs/recognition_events_latest.jsonl
+    overlay_jpeg: /home/nx163/youth-vision-runtime/overlays/latest.jpg
+    annotated_jpeg: /home/nx163/youth-vision-runtime/overlays/latest_geo.jpg
+    fused_log: /home/nx163/youth-vision-runtime/logs/geo_bridge/fused_latest.jsonl
+
+    rel_alt_topic: /mavros/global_position/rel_alt
+    global_topic: /mavros/global_position/global
+
+    # Drop a telemetry match older than this when publishing TargetCommand.
+    max_match_age_sec: 0.25
+    overlay_period_sec: 0.05
+    status_period_sec: 2.0
+
+    record_video: true
+    record_dir: /home/nx163/youth-vision-runtime/logs/geo_recordings
+    record_fps: 15.0
+    # Burn LAT/LON/ALT text onto frames. Keep false; code should read the sidecar.
+    draw_hud: false
+
+    # Keep false unless recognition records already carry target WGS84.
+    # This node no longer projects pixels to ground.
+    publish_target_command: false
+    target_topic: /vision/target_command
+    min_class_prob: 0.60
+    publish_period_sec: 1.0

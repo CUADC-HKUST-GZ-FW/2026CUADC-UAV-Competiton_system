@@ -1,0 +1,15 @@
+std_msgs/Header header
+string target_id
+string frame_path
+string crop_path
+string label
+int32 class_id
+float32 confidence
+float64 latitude
+float64 longitude
+float64 altitude_msl_m
+float32 horizontal_radius_95_m
+uint32 observation_count
+bool rtk_fixed
+bool valid
+string status

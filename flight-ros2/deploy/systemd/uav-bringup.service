@@ -1,0 +1,31 @@
+[Unit]
+Description=UAV ROS 2 Bringup
+Documentation=file:/home/nx163/uav_ros2_project/README.md
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+ConditionPathExists=/opt/ros/humble/setup.bash
+ConditionPathExists=/home/nx163/uav_ros2_project/install/setup.bash
+
+[Service]
+Type=simple
+User=nx163
+WorkingDirectory=/home/nx163/uav_ros2_project
+Environment=PYTHONUNBUFFERED=1
+Environment=ROS_DOMAIN_ID=0
+ExecStartPre=/usr/bin/test -r /opt/ros/humble/setup.bash
+ExecStartPre=/usr/bin/test -r /home/nx163/uav_ros2_project/install/setup.bash
+ExecStartPre=/usr/bin/test -r /home/nx163/uav_ros2_project/scripts/start_uav.sh
+ExecStart=/bin/bash /home/nx163/uav_ros2_project/scripts/start_uav.sh
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=uav-bringup
+
+[Install]
+WantedBy=multi-user.target
