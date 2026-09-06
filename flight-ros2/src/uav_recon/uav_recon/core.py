@@ -10,6 +10,16 @@ from typing import Callable, Deque, Generic, List, Optional, Sequence, Tuple, Ty
 EARTH_A_M = 6378137.0
 EARTH_E2 = 6.69437999014e-3
 T = TypeVar('T')
+EMPTY_TARGET_LABELS = frozenset(('empty', 'blank'))
+
+
+def is_empty_target_label(label: object) -> bool:
+    """Return whether a classifier label represents the empty target class."""
+    normalized = str(label).strip().casefold()
+    return (
+        normalized in EMPTY_TARGET_LABELS
+        or normalized.endswith('\u7a7a\u6807\u9776')
+    )
 
 
 def clamp(value: float, low: float, high: float) -> float:

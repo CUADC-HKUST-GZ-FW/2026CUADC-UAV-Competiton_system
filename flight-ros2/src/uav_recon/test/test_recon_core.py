@@ -7,6 +7,7 @@ from uav_recon.core import (
     Track,
     geodetic_delta_m,
     image_center_weight,
+    is_empty_target_label,
     lerp_tuple,
     project_pixel_to_ground,
 )
@@ -88,6 +89,15 @@ def test_image_center_weight_decreases_toward_frame_edge():
     assert image_center_weight(0.0) == 1.0
     assert image_center_weight(0.5) == 0.625
     assert image_center_weight(1.0) == 0.25
+
+
+def test_empty_target_label_is_case_and_whitespace_insensitive():
+    assert is_empty_target_label('empty')
+    assert is_empty_target_label(' EMPTY ')
+    assert is_empty_target_label('blank')
+    assert is_empty_target_label('\u9f98\u7a7a\u6807\u9776')
+    assert not is_empty_target_label('85')
+    assert not is_empty_target_label('bomber')
 
 
 def test_track_fusion_prefers_center_observation():

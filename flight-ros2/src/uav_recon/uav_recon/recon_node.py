@@ -23,6 +23,7 @@ from .core import (
     Observation,
     TimedBuffer,
     TrackManager,
+    is_empty_target_label,
     lerp_tuple,
     project_pixel_to_ground,
     quat_slerp,
@@ -233,6 +234,9 @@ class ReconGeolocatorNode(Node):
         crop_root = self.manifest_path.parent
         projected = 0
         for crop in manifest.get('crops', []):
+            label = str(crop.get('class_label', ''))
+            if is_empty_target_label(label):
+                continue
             center = crop.get('center')
             if not center or len(center) != 2:
                 continue
@@ -249,7 +253,7 @@ class ReconGeolocatorNode(Node):
                 latitude=coordinate.latitude,
                 longitude=coordinate.longitude,
                 altitude_msl_m=coordinate.altitude_msl_m,
-                label=str(crop.get('class_label', '')),
+                label=label,
                 class_id=int(crop.get('class_id', -1)),
                 confidence=float(crop.get('class_prob', 0.0)),
                 pose_score=float(crop.get('pose_score', 0.0)),
