@@ -1,0 +1,17 @@
+[Unit]
+Description=Youth Vision Competition Recon (image mode autostart)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=nx163
+WorkingDirectory=/home/nx163/youth-vision-runtime
+ExecStart=/home/nx163/youth-vision-runtime/scripts/competition_selected.sh image
+Restart=on-failure
+RestartSec=10
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

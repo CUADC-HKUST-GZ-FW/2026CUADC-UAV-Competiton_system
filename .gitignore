@@ -1,0 +1,58 @@
+# ROS 2 and native build products
+**/build/
+**/install/
+**/log/
+**/logs/
+**/.colcon/
+
+# Runtime state and generated results
+**/run/
+**/recon_results/
+**/overlays/
+**/camera_recordings/
+**/offline_inference/
+**/collections/
+**/staging/
+
+# Model artifacts are tracked by name and checksum, not committed directly
+*.engine
+*.plan
+*.pt
+*.pth
+*.onnx
+*.weights
+
+# Captures, telemetry and partial recordings
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.tlog
+*.tlog.raw
+*.partial.*
+
+# Local and historical scratch files
+*.bak
+*.bak_*
+*.before_*
+*~
+.pytest_cache/
+__pycache__/
+*.py[cod]
+
+# Credentials and machine-local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+id_rsa*
+id_ed25519*
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+

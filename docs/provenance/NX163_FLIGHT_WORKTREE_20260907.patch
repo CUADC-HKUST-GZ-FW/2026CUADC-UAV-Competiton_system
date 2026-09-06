@@ -1,0 +1,161 @@
+diff --git a/scripts/start_manual_target.sh b/scripts/start_manual_target.sh
+old mode 100644
+new mode 100755
+diff --git a/scripts/start_uav.sh b/scripts/start_uav.sh
+old mode 100644
+new mode 100755
+diff --git a/src/uav_recon/config/recon.yaml b/src/uav_recon/config/recon.yaml
+index 580126a..3a02dda 100644
+--- a/src/uav_recon/config/recon.yaml
++++ b/src/uav_recon/config/recon.yaml
+@@ -1,25 +1,29 @@
+ recon_geolocator:
+   ros__parameters:
+-    manifest_path: /home/nx163/youth-vision-runtime/overlays/latest_crops/manifest.json
++    manifest_path: /home/nx163/youth-vision-runtime/overlays/latest_crops/manifest_fast.json
+     frame_source_path: /home/nx163/youth-vision-runtime/overlays/latest.jpg
+     output_root: /home/nx163/youth-vision-runtime/recon_results/current
++    # Poll above the 60 FPS vision rate so every target-frame manifest can be consumed.
++    manifest_poll_hz: 120.0
++    result_write_hz: 20.0
++    snapshot_write_hz: 5.0
+ 
+-    # Accepted field model for the 6 mm lens: 45 x 34.5 degree FOV at 1440 x 1080.
+-    # A checkerboard calibration can replace these estimates later without changing geometry code.
++    # 11 x 8 checkerboard calibration for the 6 mm lens at 1440 x 1080.
++    # 19 valid images; OpenCV RMS reprojection error: 0.084497612 px.
+     calibration_valid: true
+     calibration_width: 1440
+     calibration_height: 1080
+-    fx: 1738.23
+-    fy: 1737.08
+-    cx: 719.5
+-    cy: 539.5
+-    distortion: [0.0, 0.0, 0.0, 0.0, 0.0]
++    fx: 1828.0308235733144
++    fy: 1827.57772607314
++    cx: 769.3836267628353
++    cy: 543.4421171826395
++    distortion: [-0.0859352217243637, 0.15751764323036913, -0.0006214740525721936, 0.00016255105402478186, 0.168712316803506]
+ 
+     # Image top points toward the aircraft nose. The optical axis is down and
+     # pitched 20 degrees toward that same forward direction.
+     camera_forward_tilt_deg: 20.0
+     # Camera origin relative to the FCU body origin: forward, left, up in metres.
+-    camera_offset_flu_m: [0.42, 0.0, -0.03]
++    camera_offset_flu_m: [0.418, 0.0, -0.09]
+ 
+     # home_relative estimates a flat field MSL altitude as global_alt - relative_alt.
+     # fixed_msl is preferred after surveying the operating field.
+@@ -33,7 +37,7 @@ recon_geolocator:
+     minimum_observation_span_sec: 0.20
+     minimum_label_consensus: 0.80
+     single_observation_sigma_m: 0.15
+-    max_horizontal_radius_95_m: 0.50
++    max_horizontal_radius_95_m: 6.0
+ 
+     # Coordinate fusion keeps every accepted frame, but gives image-center
+     # observations more influence than observations near the image boundary.
+diff --git a/src/uav_recon/uav_recon/recon_node.py b/src/uav_recon/uav_recon/recon_node.py
+index 2835ed2..b050813 100644
+--- a/src/uav_recon/uav_recon/recon_node.py
++++ b/src/uav_recon/uav_recon/recon_node.py
+@@ -77,6 +77,8 @@ class ReconGeolocatorNode(Node):
+         self.last_manifest_key = None
+         self.last_status = None
+         self.last_status_write = 0.0
++        self.last_result_write = {}
++        self.last_snapshot_write = {}
+ 
+         self.publisher = self.create_publisher(ReconTarget, '/vision/recon_result', 10)
+         self.create_subscription(
+@@ -112,7 +114,7 @@ class ReconGeolocatorNode(Node):
+ 
+     def _declare_parameters(self):
+         values = {
+-            'manifest_path': '/home/nx163/youth-vision-runtime/overlays/latest_crops/manifest.json',
++            'manifest_path': '/home/nx163/youth-vision-runtime/overlays/latest_crops/manifest_fast.json',
+             'frame_source_path': '/home/nx163/youth-vision-runtime/overlays/latest.jpg',
+             'output_root': '/home/nx163/youth-vision-runtime/recon_results/current',
+             'global_position_topic': '/mavros/global_position/global',
+@@ -142,6 +144,8 @@ class ReconGeolocatorNode(Node):
+             'max_horizontal_radius_95_m': 0.50,
+             'center_weight_minimum': 0.25,
+             'center_weight_power': 1.0,
++            'result_write_hz': 20.0,
++            'snapshot_write_hz': 5.0,
+         }
+         for name, value in values.items():
+             self.declare_parameter(name, value)
+@@ -193,8 +197,8 @@ class ReconGeolocatorNode(Node):
+         key = (capture_ns, frame_number)
+         if key == self.last_manifest_key:
+             return
+-        self.last_manifest_key = key
+         if capture_ns <= 0:
++            self.last_manifest_key = key
+             self._set_status('vision_timestamp_missing', 'runtime manifest must provide capture_timestamp_unix_ns')
+             return
+         capture_time = capture_ns * 1e-9
+@@ -218,8 +222,13 @@ class ReconGeolocatorNode(Node):
+         frame_width = int(manifest.get('frame_width', 0))
+         frame_height = int(manifest.get('frame_height', 0))
+         if frame_width <= 0 or frame_height <= 0:
++            self.last_manifest_key = key
+             self._set_status('vision_geometry_missing', 'frame dimensions absent from manifest')
+             return
++        # Mark a frame consumed only after matching telemetry and geometry are
++        # available. This lets a just-arrived camera frame be retried while its
++        # corresponding MAVROS samples are still entering the short buffer.
++        self.last_manifest_key = key
+         camera = self._camera_model(frame_width, frame_height)
+         crop_root = self.manifest_path.parent
+         projected = 0
+@@ -228,8 +237,6 @@ class ReconGeolocatorNode(Node):
+             if not center or len(center) != 2:
+                 continue
+             crop_path = crop_root / crop.get('src', '')
+-            if not crop_path.is_file() or not self.frame_source_path.is_file():
+-                continue
+             try:
+                 coordinate = project_pixel_to_ground(
+                     center, position, attitude, ground_altitude, camera
+@@ -304,8 +311,6 @@ class ReconGeolocatorNode(Node):
+         frame_destination = target_dir / 'frame.jpg'
+         crop_destination = target_dir / 'crop_128.jpg'
+         best = fused['best']
+-        atomic_copy(Path(best.frame_path), frame_destination)
+-        atomic_copy(Path(best.crop_path), crop_destination)
+         record = {
+             'target_id': track.target_id,
+             'frame_path': f'{track.target_id}/frame.jpg',
+@@ -332,7 +337,6 @@ class ReconGeolocatorNode(Node):
+             'valid': valid,
+             'status': status,
+         }
+-        atomic_json(target_dir / 'result.json', record)
+         message = ReconTarget()
+         message.header.stamp = self.get_clock().now().to_msg()
+         message.header.frame_id = 'wgs84'
+@@ -352,6 +356,21 @@ class ReconGeolocatorNode(Node):
+         message.status = status
+         self.publisher.publish(message)
+ 
++        now = time.monotonic()
++        result_period = 1.0 / max(1.0, float(self.get_parameter('result_write_hz').value))
++        if now - self.last_result_write.get(track.target_id, 0.0) >= result_period:
++            atomic_json(target_dir / 'result.json', record)
++            self.last_result_write[track.target_id] = now
++
++        snapshot_period = 1.0 / max(1.0, float(self.get_parameter('snapshot_write_hz').value))
++        if now - self.last_snapshot_write.get(track.target_id, 0.0) >= snapshot_period:
++            source_frame = Path(best.frame_path)
++            source_crop = Path(best.crop_path)
++            if source_frame.is_file() and source_crop.is_file():
++                atomic_copy(source_frame, frame_destination)
++                atomic_copy(source_crop, crop_destination)
++                self.last_snapshot_write[track.target_id] = now
++
+ 
+ def main(args=None):
+     rclpy.init(args=args)

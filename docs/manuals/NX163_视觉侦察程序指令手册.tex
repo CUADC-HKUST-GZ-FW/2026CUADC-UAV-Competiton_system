@@ -1,0 +1,353 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=16mm,top=14mm,bottom=16mm]{geometry}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+\usepackage{needspace}
+\usepackage{hyperref}
+\usepackage[most]{tcolorbox}
+\usepackage{listings}
+
+\setmainfont{Segoe UI}
+\setsansfont{Segoe UI Semibold}
+\setmonofont{Courier New}[Scale=0.88]
+\setCJKmainfont{Microsoft YaHei}
+\setCJKsansfont{Microsoft YaHei}
+\setCJKmonofont{Microsoft YaHei}
+
+\definecolor{Ink}{HTML}{17252D}
+\definecolor{Muted}{HTML}{5B6B73}
+\definecolor{Teal}{HTML}{087E73}
+\definecolor{TealSoft}{HTML}{E9F5F2}
+\definecolor{Blue}{HTML}{265D8F}
+\definecolor{BlueSoft}{HTML}{EDF3F8}
+\definecolor{Amber}{HTML}{B56A00}
+\definecolor{AmberSoft}{HTML}{FFF4DF}
+\definecolor{Red}{HTML}{A33A3A}
+\definecolor{RedSoft}{HTML}{FBECEC}
+\definecolor{CodeBg}{HTML}{111A20}
+\definecolor{CodeFg}{HTML}{E7F0F2}
+\definecolor{Line}{HTML}{CAD5D9}
+
+\hypersetup{colorlinks=true,linkcolor=Teal,urlcolor=Blue,pdfauthor={YOUTH Vision Team},pdftitle={NX163 视觉侦察程序指令手册}}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{4pt}
+\setlist[itemize]{leftmargin=1.5em,itemsep=2pt,topsep=3pt}
+\setlist[enumerate]{leftmargin=1.7em,itemsep=2pt,topsep=3pt}
+\renewcommand{\arraystretch}{1.25}
+
+\titleformat{\section}{\Large\bfseries\color{Ink}}{}{0pt}{}[\vspace{2pt}\color{Teal}\titlerule]
+\titleformat{\subsection}{\large\bfseries\color{Ink}}{}{0pt}{}
+\titlespacing*{\section}{0pt}{12pt}{7pt}
+\titlespacing*{\subsection}{0pt}{9pt}{4pt}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{Muted}NX163 \textbar{} 视觉侦察运行手册}
+\fancyhead[R]{\small\color{Muted}2026-09-06}
+\fancyfoot[L]{\small\color{Muted}USB SSH: 192.168.55.1}
+\fancyfoot[R]{\small\color{Muted}\thepage/\pageref{LastPage}}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+\setlength{\headheight}{13pt}
+
+\lstdefinestyle{shell}{
+  language=bash,
+  basicstyle=\ttfamily\small\color{CodeFg},
+  keywordstyle=\color{white}\bfseries,
+  stringstyle=\color{cyan!65},
+  commentstyle=\color{gray!55},
+  showstringspaces=false,
+  breaklines=true,
+  breakatwhitespace=false,
+  columns=fullflexible,
+  keepspaces=true,
+  upquote=true
+}
+
+\newtcblisting{commandbox}[1][]{
+  enhanced,
+  breakable,
+  listing only,
+  listing engine=listings,
+  listing options={style=shell},
+  colback=CodeBg,
+  colframe=CodeBg,
+  arc=2mm,
+  boxrule=0pt,
+  left=3mm,right=3mm,top=2mm,bottom=2mm,
+  #1
+}
+
+\newtcolorbox{statusbox}[1][]{enhanced,breakable,colback=TealSoft,colframe=Teal,boxrule=0.7pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm,#1}
+\newtcolorbox{notebox}[1][]{enhanced,breakable,colback=BlueSoft,colframe=Blue,boxrule=0.7pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm,#1}
+\newtcolorbox{warnbox}[1][]{enhanced,breakable,colback=AmberSoft,colframe=Amber,boxrule=0.7pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm,#1}
+\newtcolorbox{dangerbox}[1][]{enhanced,breakable,colback=RedSoft,colframe=Red,boxrule=0.8pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm,#1}
+
+\newcommand{\tagpill}[2]{\tcbox[on line,boxrule=0pt,arc=1.5mm,colback=#1!12,coltext=#1,left=1.2mm,right=1.2mm,top=0.4mm,bottom=0.4mm]{\scriptsize\bfseries #2}}
+\newcommand{\filepath}[1]{\texttt{\small\detokenize{#1}}}
+
+\begin{document}
+
+\begin{tcolorbox}[enhanced,colback=Ink,colframe=Ink,arc=2mm,boxrule=0pt,left=5mm,right=5mm,top=5mm,bottom=5mm]
+  {\fontsize{23}{28}\selectfont\bfseries\color{white}NX163 视觉侦察程序指令手册}\par
+  \vspace{2mm}
+  {\large\color{white!78}比赛侦察、实时识别、结果面板、日志与受控融合启动}\par
+  \vspace{3mm}
+  \tagpill{cyan}{主机 nx163@nx163-desktop}\quad
+  \tagpill{green}{当前 image 自启动}\quad
+  \tagpill{orange}{无框录像 600 s}\quad
+  \tagpill{blue}{更新 2026-09-06}
+\end{tcolorbox}
+
+\begin{statusbox}[title={\bfseries 当前实机状态}]
+\begin{tabularx}{\linewidth}{>{\bfseries}p{33mm}X}
+登录用户 & \texttt{nx163} \\
+视觉目录 & \filepath{/home/nx163/youth-vision-runtime} \\
+ROS2 目录 & \filepath{/home/nx163/uav_ros2_project} \\
+开机服务 & \texttt{youth-vision.service}: \texttt{enabled + active} \\
+默认模式 & 比赛图案侦察 \texttt{competition\_selected.sh image} \\
+录像 & 原始无框视频，1440x1080，60 FPS，最长 600 秒 \\
+\end{tabularx}
+\end{statusbox}
+
+\begin{warnbox}[title={\bfseries 先看这三条}]
+\begin{enumerate}
+  \item 同一时间只运行一套占用相机的视觉程序。
+  \item 结果面板只读文件，可以和比赛侦察同时运行。
+  \item \texttt{competition\_selected.sh} 不启动飞控；\texttt{start\_single\_target\_fusion.sh} 会启动真实飞控融合链，二者不能混用。
+\end{enumerate}
+\end{warnbox}
+
+\section{连接与身份确认}
+
+\begin{commandbox}
+ssh nx163@192.168.55.1
+whoami
+hostname
+pwd
+\end{commandbox}
+
+正常应分别看到 \texttt{nx163}、\texttt{nx163-desktop}、\filepath{/home/nx163}。
+
+\section{比赛侦察}
+
+这是正式比赛选择逻辑的入口。它启动 Pose、分类、坐标解算、一套 MAVROS 和比赛选择器，并保存所有侦察结果。图案模式选择三个非空目标中价值最高者；数字模式选择三个非空数字的中位数目标。最终只生成一个候选坐标接口，但不会自行启动飞控。
+
+\subsection{图案模式}
+\begin{commandbox}
+/home/nx163/youth-vision-runtime/scripts/competition_selected.sh image
+\end{commandbox}
+
+\subsection{数字模式}
+\begin{commandbox}
+/home/nx163/youth-vision-runtime/scripts/competition_selected.sh digit
+\end{commandbox}
+
+若提示已有侦察进程，先执行：
+\begin{commandbox}
+sudo systemctl stop youth-vision
+/home/nx163/youth-vision-runtime/scripts/stop_recon_pipeline.sh
+\end{commandbox}
+
+\begin{notebox}[title={\bfseries 比赛输出}]
+全部结果位于 \filepath{/home/nx163/youth-vision-runtime/recon_results/latest/target_*/result.json}；唯一选择写入 \filepath{/home/nx163/youth-vision-runtime/recon_results/latest/competition_selected.json}，并发布到 \texttt{/vision/competition\_selected\_target}。
+\end{notebox}
+
+\section{普通侦察与识别}
+
+第二个参数是期望标靶数，范围为 0--20。\texttt{0} 表示持续运行，不因目标数量自动结束。
+
+\textbf{单标靶数字侦察}
+\begin{commandbox}
+/home/nx163/youth-vision-runtime/scripts/start_recon_pipeline.sh digit 1
+\end{commandbox}
+
+\textbf{单标靶图案侦察}
+\begin{commandbox}
+/home/nx163/youth-vision-runtime/scripts/start_recon_pipeline.sh image 1
+\end{commandbox}
+
+\textbf{持续图案侦察}
+\begin{commandbox}
+/home/nx163/youth-vision-runtime/scripts/start_recon_pipeline.sh image 0
+\end{commandbox}
+
+普通侦察包含 Pose、分类、MAVROS 与坐标节点，但不启动比赛“三选一”选择器，也不启动飞控。
+
+\subsection{停止侦察}
+\begin{commandbox}
+/home/nx163/youth-vision-runtime/scripts/stop_recon_pipeline.sh
+\end{commandbox}
+
+\begin{warnbox}
+不要给停止脚本添加 \texttt{--help}。该脚本不解析帮助参数，执行后会直接停止当前侦察。
+\end{warnbox}
+
+\Needspace{72mm}
+\section{网页程序}
+
+\subsection{侦察结果面板}
+
+结果面板不占用相机，可与比赛侦察同时运行。这里显式使用 6 米展示去重半径：
+
+\begin{commandbox}
+RADIUS_M=6.0 /home/nx163/youth-vision-runtime/scripts/start_recon_results_dashboard.sh
+\end{commandbox}
+
+\begin{center}
+\href{http://192.168.55.1:8092/}{\texttt{http://192.168.55.1:8092/}}
+\end{center}
+
+\begin{commandbox}
+/home/nx163/youth-vision-runtime/scripts/stop_recon_results_dashboard.sh
+\end{commandbox}
+
+\subsection{实时摄像头识别网页}
+
+此程序独占相机。先停止开机侦察，再启动需要的模式：
+
+\begin{commandbox}
+sudo systemctl stop youth-vision
+/home/nx163/youth-vision-runtime/scripts/stop_recon_pipeline.sh
+
+WEB_PORT=8000 /home/nx163/youth-vision-runtime/scripts/start_youth_pipeline.sh image
+\end{commandbox}
+
+数字模式使用：
+\begin{commandbox}
+WEB_PORT=8000 /home/nx163/youth-vision-runtime/scripts/start_youth_pipeline.sh digit
+\end{commandbox}
+
+访问 \href{http://192.168.55.1:8000/}{\texttt{http://192.168.55.1:8000/}}。停止实时网页识别：
+
+\begin{commandbox}
+/home/nx163/youth-vision-runtime/scripts/stop_youth_pipeline.sh
+\end{commandbox}
+
+\subsection{普通侦察加实时网页}
+
+以下入口同时启动普通侦察和实时网页，但不包含比赛选择器：
+
+\begin{commandbox}
+WEB_PORT=8000 /home/nx163/youth-vision-runtime/scripts/start_recon_web.sh image
+\end{commandbox}
+
+数字模式使用：
+\begin{commandbox}
+WEB_PORT=8000 /home/nx163/youth-vision-runtime/scripts/start_recon_web.sh digit
+\end{commandbox}
+
+访问 \href{http://192.168.55.1:8000/index_recon.html}{\texttt{http://192.168.55.1:8000/index\_recon.html}}。
+
+\Needspace{68mm}
+\section{开机服务与恢复}
+
+当前开机服务固定启动比赛 \texttt{image} 模式。
+
+\textbf{状态、启动与停止}
+\begin{commandbox}
+systemctl status youth-vision --no-pager
+sudo systemctl start youth-vision
+sudo systemctl stop youth-vision
+\end{commandbox}
+
+\textbf{开机自启动控制}
+\begin{commandbox}
+sudo systemctl enable youth-vision
+sudo systemctl disable youth-vision
+\end{commandbox}
+
+\Needspace{25mm}
+\textbf{持续查看本次开机日志}
+\begin{commandbox}
+journalctl -u youth-vision -b -f
+\end{commandbox}
+
+推荐使用下面的完整恢复顺序，避免旧子进程占用相机或 MAVROS：
+
+\begin{commandbox}
+sudo systemctl stop youth-vision
+/home/nx163/youth-vision-runtime/scripts/stop_recon_pipeline.sh
+sudo systemctl start youth-vision
+\end{commandbox}
+
+\section{结果、日志与录像}
+
+\begin{tabularx}{\linewidth}{>{\bfseries}p{34mm}X}
+当前侦察结果 & \filepath{/home/nx163/youth-vision-runtime/recon_results/latest/} \\
+侦察日志 & \filepath{/home/nx163/youth-vision-runtime/logs/recon/} \\
+识别事件 & \filepath{/home/nx163/youth-vision-runtime/logs/recognition/} \\
+无框原始录像 & \filepath{/home/nx163/camera_recordings/} \\
+服务定义 & \filepath{/etc/systemd/system/youth-vision.service} \\
+\end{tabularx}
+
+\textbf{当前会话目录}
+\begin{commandbox}
+readlink -f /home/nx163/youth-vision-runtime/recon_results/latest
+\end{commandbox}
+
+\textbf{最近录像与视觉日志}
+\begin{commandbox}
+ls -lht /home/nx163/camera_recordings | head
+ls -lt /home/nx163/youth-vision-runtime/logs/recon | head
+\end{commandbox}
+
+\textbf{检查关键进程}
+\begin{commandbox}
+pgrep -af 'youth_vision_runner|mavros_node|recon_geolocator_node|competition_selector.py'
+\end{commandbox}
+
+\Needspace{92mm}
+\section{飞控相关入口}
+
+\begin{dangerbox}[title={\bfseries 受控测试区命令}]
+以下程序会进入飞控、任务上传、模式切换或载荷相关链路。路径已经迁移为 NX163，但本次只完成静态依赖检查，没有执行真实飞行闭环。必须在拆桨、无载荷或经批准的 SITL/DRY\_RUN 环境完成首轮验证。
+\end{dangerbox}
+
+\subsection{读取配置并启动飞控 bringup}
+\begin{commandbox}
+cat /home/nx163/uav_ros2_project/config/recognition_mode.conf
+bash /home/nx163/uav_ros2_project/scripts/start_uav.sh
+\end{commandbox}
+
+配置中的识别模式应为 \texttt{digit}、\texttt{image} 或 \texttt{none}。
+
+\subsection{单标靶视觉飞控融合}
+\begin{commandbox}
+/home/nx163/uav_ros2_project/scripts/start_single_target_fusion.sh digit 90
+/home/nx163/uav_ros2_project/scripts/start_single_target_fusion.sh image 90
+\end{commandbox}
+
+第二个参数为 \texttt{heading\_deg}。该入口会启动飞控 bringup、侦察、桥接和任务管理，不是纯识别命令。
+
+\subsection{人工坐标输入}
+\begin{commandbox}
+bash /home/nx163/uav_ros2_project/scripts/start_manual_target.sh LATITUDE LONGITUDE HEADING_DEG
+\end{commandbox}
+
+\section{快速排查}
+
+\begin{tabularx}{\linewidth}{>{\bfseries\color{Ink}}p{38mm}X}
+提示 already running & 先停止 \texttt{youth-vision}，再运行 \texttt{stop\_recon\_pipeline.sh}。 \\
+相机打不开 & 检查是否存在第二个 \texttt{youth\_vision\_runner} 或实时网页识别进程。 \\
+UDP 15001 被占用 & 使用 \texttt{ss -lunp | grep 15001} 检查重复 MAVROS。 \\
+有识别但无坐标 & 检查 FCU telemetry、RTK \texttt{fix\_type >= 6}、姿态与相对高度。 \\
+录像没有生成 & 检查 \filepath{/home/nx163/camera_recordings/} 剩余空间是否低于 2 GiB。 \\
+TensorRT 跨设备警告 & 与用户名路径无关；应在 NX163 本机重新生成或核验三个 engine。 \\
+\end{tabularx}
+
+\begin{notebox}[title={\bfseries 本版核验边界}]
+已核验 NX163 路径、脚本语法、ROS2 包、比赛 image 自启动、单实例进程、600 秒参数链路和无框录像创建。未执行真实飞控、航点上传、模式切换及载荷动作。
+\end{notebox}
+
+\end{document}
