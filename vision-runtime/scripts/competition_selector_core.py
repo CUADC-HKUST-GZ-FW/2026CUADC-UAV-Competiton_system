@@ -105,29 +105,26 @@ def quality_key(record):
 
 
 def cluster_records(records, radius_m):
-    parent = list(range(len(records)))
+    radius_m = max(0.0, radius_m)
+    groups = []
+    for record in sorted(records, key=quality_key, reverse=True):
+        compatible = [
+            group
+            for group in groups
+            if all(distance_m(record, member) <= radius_m for member in group)
+        ]
+        if not compatible:
+            groups.append([record])
+            continue
 
-    def find(index):
-        while parent[index] != index:
-            parent[index] = parent[parent[index]]
-            index = parent[index]
-        return index
-
-    def union(left, right):
-        left_root = find(left)
-        right_root = find(right)
-        if left_root != right_root:
-            parent[right_root] = left_root
-
-    for left in range(len(records)):
-        for right in range(left + 1, len(records)):
-            if distance_m(records[left], records[right]) <= radius_m:
-                union(left, right)
-
-    groups = {}
-    for index, record in enumerate(records):
-        groups.setdefault(find(index), []).append(record)
-    return list(groups.values())
+        # Complete-link grouping prevents A-B-C chains from joining two targets
+        # whose endpoints are farther apart than the configured radius.
+        group = min(
+            compatible,
+            key=lambda members: distance_m(record, members[0]),
+        )
+        group.append(record)
+    return groups
 
 
 def choose_competition_target(records, mode, required_targets=3, dedup_radius_m=3.0):
@@ -142,16 +139,34 @@ def choose_competition_target(records, mode, required_targets=3, dedup_radius_m=
             continue
         eligible.append({**record, 'competition_value': value})
 
-    representatives = [
+    spatial_representatives = [
         max(group, key=quality_key)
         for group in cluster_records(eligible, max(0.0, dedup_radius_m))
     ]
+
+    # Competition rules guarantee three different non-empty labels. Treat a
+    # repeated label as a duplicate track, even when coordinate scatter split
+    # it into more than one spatial group.
+    representatives_by_value = {}
+    duplicate_labels = []
+    for record in spatial_representatives:
+        value = record['competition_value']
+        current = representatives_by_value.get(value)
+        if current is None or quality_key(record) > quality_key(current):
+            if current is not None:
+                duplicate_labels.append(current)
+            representatives_by_value[value] = record
+        else:
+            duplicate_labels.append(record)
+
+    representatives = list(representatives_by_value.values())
     representatives.sort(key=quality_key, reverse=True)
     if len(representatives) < required_targets:
-        return None, representatives, []
+        return None, representatives, duplicate_labels
 
     candidates = representatives[:required_targets]
-    ignored = representatives[required_targets:]
+    ignored = duplicate_labels + representatives[required_targets:]
+    ignored.sort(key=quality_key, reverse=True)
     if mode == 'digit':
         selected = sorted(
             candidates,

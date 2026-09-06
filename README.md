@@ -30,6 +30,15 @@
 /home/nx163/youth-vision-runtime/scripts/competition_selected.sh digit
 ```
 
+比赛四标靶全链路，第二个参数是打击航向角：
+
+```bash
+/home/nx163/uav_ros2_project/scripts/start_competition_target_fusion.sh image 90
+/home/nx163/uav_ros2_project/scripts/start_competition_target_fusion.sh digit 90
+```
+
+全链路等待三个非空确认目标；数字模式选择数值中位数，图案模式选择比赛价值最高者，然后经现有 bridge 只向 `/vision/target_command` 发布一次唯一坐标。该入口会启动真实飞控任务组件，运行前必须停止 `youth-vision.service` 和其他视觉、MAVROS、飞控进程。
+
 开机服务：
 
 ```text
@@ -62,4 +71,3 @@ NX163 与 NX164 使用同一 `main` 基线，开发通过短期功能分支完�
 ## 本次导出状态
 
 当前源码和配置已完成大文件、常见凭据、私钥及跨设备 `/home/nx164` 残留扫描。导出后检查时 NX163 未枚举到海康相机，开机服务因此重试；日志为 `MVS camera ... not found; available serials: []`，这是硬件未连接状态，不是 600 秒参数回退。
-
