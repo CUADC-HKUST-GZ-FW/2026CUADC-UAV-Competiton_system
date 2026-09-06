@@ -13,6 +13,7 @@
 **/offline_inference/
 **/collections/
 **/staging/
+**/$(ALLUSERSPROFILE)/
 
 # Model artifacts are tracked by name and checksum, not committed directly
 *.engine
@@ -55,4 +56,3 @@ id_ed25519*
 .idea/
 .DS_Store
 Thumbs.db
-
