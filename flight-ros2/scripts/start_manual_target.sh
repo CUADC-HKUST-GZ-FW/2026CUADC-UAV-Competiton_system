@@ -6,6 +6,7 @@ set -Eeuo pipefail
 readonly ROS_SETUP="/opt/ros/humble/setup.bash"
 readonly WS_ROOT="/home/nx163/uav_ros2_project"
 readonly WS_SETUP="${WS_ROOT}/install/setup.bash"
+readonly TARGET_SENDER="${WS_ROOT}/scripts/manual_target_sender.py"
 
 # ============================================================
 # 参数
@@ -68,6 +69,11 @@ if [[ ! -r "${WS_SETUP}" ]]; then
     exit 1
 fi
 
+if [[ ! -r "${TARGET_SENDER}" ]]; then
+    echo "[ERROR] manual target sender not found: ${TARGET_SENDER}" >&2
+    exit 1
+fi
+
 # 防止已经有 systemd bringup 在运行
 if systemctl is-active --quiet uav-bringup.service; then
     echo "[ERROR] uav-bringup.service is already active." >&2
@@ -91,6 +97,7 @@ cd "${WS_ROOT}"
 # ============================================================
 
 LAUNCH_PID=""
+SENDER_PID=""
 CLEANUP_DONE=0
 
 cleanup() {
@@ -100,6 +107,12 @@ cleanup() {
 
     CLEANUP_DONE=1
     set +e
+
+    # Cancel the pending target before stopping the rest of the stack.
+    if [[ -n "${SENDER_PID}" ]] && kill -0 "${SENDER_PID}" 2>/dev/null; then
+        kill -TERM "${SENDER_PID}" 2>/dev/null || true
+        wait "${SENDER_PID}" 2>/dev/null || true
+    fi
 
     if [[ -n "${LAUNCH_PID}" ]] && kill -0 "${LAUNCH_PID}" 2>/dev/null; then
         echo
@@ -123,7 +136,9 @@ cleanup() {
     fi
 }
 
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 
 # ============================================================
@@ -158,92 +173,34 @@ echo "[STARTUP] ros2 launch pid=${LAUNCH_PID}"
 
 
 # ============================================================
-# 等待 Mission Manager / FCU Interface / target topic 就绪
+# 暂存坐标，等待任务节点允许执行后再发送一次
 # ============================================================
 
-echo "[STARTUP] waiting for mission system..."
+echo "[TARGET][PENDING] coordinates held in memory until mission manager is ready"
+echo "[TARGET][PENDING] waiting has no 30-second timeout; Ctrl+C cancels the target"
 
-deadline=$((SECONDS + 30))
+python3 "${TARGET_SENDER}" "${LATITUDE}" "${LONGITUDE}" "${HEADING_DEG}" &
+SENDER_PID=$!
 
-while true; do
-
+while kill -0 "${SENDER_PID}" 2>/dev/null; do
     if ! kill -0 "${LAUNCH_PID}" 2>/dev/null; then
-        echo "[ERROR] real_bringup exited during startup" >&2
-        wait "${LAUNCH_PID}" || true
+        echo "[ERROR] real_bringup exited while waiting to send target" >&2
         exit 1
     fi
-
-    node_list="$(
-        ros2 node list --no-daemon --spin-time 3.0 2>/dev/null || true
-    )"
-
-    target_info="$(
-        ros2 topic info /vision/target_command 2>/dev/null || true
-    )"
-
-    target_subscribers="$(
-        awk '/Subscription count:/ {print $3; exit}' <<<"${target_info}"
-    )"
-    target_subscribers="${target_subscribers:-0}"
-
-    service_list="$(
-        ros2 service list 2>/dev/null || true
-    )"
-
-    mission_ready=0
-    fcu_ready=0
-    goto_ready=0
-
-    if grep -Fqx "/mission_manager_node" <<<"${node_list}"; then
-        mission_ready=1
-    fi
-
-    if grep -Fqx "/fcu_interface_mavros_node" <<<"${node_list}"; then
-        fcu_ready=1
-    fi
-
-    if grep -Fqx "/fcu/goto_global" <<<"${service_list}"; then
-        goto_ready=1
-    fi
-
-    if [[ "${mission_ready}" == "1" ]] \
-        && [[ "${fcu_ready}" == "1" ]] \
-        && [[ "${goto_ready}" == "1" ]] \
-        && (( target_subscribers >= 1 )); then
-
-        break
-    fi
-
-    if (( SECONDS >= deadline )); then
-        echo "[ERROR] mission system was not ready within 30 seconds" >&2
-        echo "mission_manager=${mission_ready}" >&2
-        echo "fcu_interface=${fcu_ready}" >&2
-        echo "goto_global=${goto_ready}" >&2
-        echo "target_subscribers=${target_subscribers}" >&2
-        exit 1
-    fi
-
     sleep 1
 done
 
-
-# ============================================================
-# 发布人工指定目标
-# ============================================================
-
-echo "[TARGET] mission system ready"
-echo "[TARGET] publishing target command..."
-
-ros2 topic pub --once \
-    --node-name manual_target_publisher_node \
-    --keep-alive 2.0 \
-    /vision/target_command \
-    uav_interfaces/msg/TargetCommand \
-    "{latitude: ${LATITUDE}, longitude: ${LONGITUDE}, heading_deg: ${HEADING_DEG}}"
+sender_result=0
+wait "${SENDER_PID}" || sender_result=$?
+SENDER_PID=""
+if (( sender_result != 0 )); then
+    echo "[ERROR] manual target sender exited with code ${sender_result}" >&2
+    exit "${sender_result}"
+fi
 
 echo
 echo "=========================================="
-echo " Target command sent"
+echo " Target command published once (check manager acceptance log)"
 echo "=========================================="
 echo "latitude    = ${LATITUDE}"
 echo "longitude   = ${LONGITUDE}"

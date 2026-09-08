@@ -9,6 +9,22 @@
 
 不要为 NX163、NX164 长期维护两条相互独立的源码分支，否则相机、坐标和飞控修复会逐渐丢失同步。
 
+## 统一仓库上传入口
+
+统一仓库已转移至组织：
+
+```text
+https://github.com/CUADC-HKUST-GZ-FW/2026CUADC-UAV-Competiton_system.git
+```
+
+开发机本地仓库继续位于 `github_publish/CUADC-UAV-Recon-Fusion/`，但其 `origin`
+必须使用上述组织地址。提交前先执行 `git fetch origin` 并确认本地分支没有落后；
+只暂存本次确认过的源码路径，完成检查后再执行 `git push origin main`。
+
+NX163 的 `/home/nx163/uav_ros2_project` 是独立飞控仓库，仓库根目录与统一仓库中的
+`flight-ros2/` 子目录不同。禁止把 NX163 的 `origin` 直接改成统一仓库；应先把确认过的
+飞控源码导入开发机的 `flight-ros2/`，再由开发机提交和推送。
+
 ## 必须分设备核验的内容
 
 1. Linux 用户名和 `/home/nx163`、`/home/nx164` 路径。
@@ -37,4 +53,3 @@
 - 另一台 Jetson 生成的 TensorRT engine。
 - ROS 2 的 `build/install/log`。
 - 未确认来源的绝对路径和旧版备份文件。
-
