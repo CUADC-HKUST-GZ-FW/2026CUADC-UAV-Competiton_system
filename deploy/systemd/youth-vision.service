@@ -1,5 +1,5 @@
 [Unit]
-Description=Youth Vision Competition Recon (image mode autostart)
+Description=Youth Vision Static Competition Recon (image, fixed 11.5 m)
 After=network-online.target
 Wants=network-online.target
 
@@ -8,12 +8,12 @@ Type=oneshot
 RemainAfterExit=yes
 User=nx163
 WorkingDirectory=/home/nx163/youth-vision-runtime
-ExecStart=/home/nx163/youth-vision-runtime/scripts/competition_selected.sh image
+ExecStart=/home/nx163/youth-vision-runtime/scripts/competition_selected_static.sh image 11.5
 ExecStop=/home/nx163/youth-vision-runtime/scripts/stop_recon_pipeline.sh
 Restart=on-failure
 RestartSec=10
-TimeoutStopSec=20
 KillMode=control-group
+TimeoutStopSec=15
 
 [Install]
 WantedBy=multi-user.target

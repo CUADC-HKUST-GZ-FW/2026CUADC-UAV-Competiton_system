@@ -110,7 +110,8 @@ class ReconGeolocatorNode(Node):
         self.create_timer(poll_period, self._poll_manifest)
         self.get_logger().info(
             f'recon ready: manifest={self.manifest_path}, output={self.output_root}, '
-            f'camera tilt={self.get_parameter("camera_forward_tilt_deg").value:.1f} deg forward'
+            f'camera tilt={self.get_parameter("camera_forward_tilt_deg").value:.1f} deg forward, '
+            f'{self.get_parameter("camera_left_tilt_deg").value:.1f} deg left'
         )
 
     def _declare_parameters(self):
@@ -134,9 +135,11 @@ class ReconGeolocatorNode(Node):
             'cy': 539.5,
             'distortion': [0.0, 0.0, 0.0, 0.0, 0.0],
             'camera_forward_tilt_deg': 20.0,
+            'camera_left_tilt_deg': 0.0,
             'camera_offset_flu_m': [0.0, 0.0, 0.0],
             'ground_altitude_mode': 'home_relative',
             'fixed_ground_altitude_msl_m': 0.0,
+            'fixed_relative_altitude_m': 0.0,
             'association_radius_m': 3.0,
             'minimum_observations': 5,
             'minimum_observation_span_sec': 0.20,
@@ -280,6 +283,11 @@ class ReconGeolocatorNode(Node):
         mode = str(self.get_parameter('ground_altitude_mode').value)
         if mode == 'fixed_msl':
             return float(self.get_parameter('fixed_ground_altitude_msl_m').value)
+        if mode == 'fixed_relative':
+            relative = float(self.get_parameter('fixed_relative_altitude_m').value)
+            if not math.isfinite(relative) or relative <= 0.0:
+                return None
+            return aircraft_altitude - relative
         if mode == 'home_relative':
             relative = self.relative_altitudes.interpolate(timestamp, lambda a, b, r: a + r * (b - a), max_gap)
             return None if relative is None else aircraft_altitude - relative
@@ -296,6 +304,7 @@ class ReconGeolocatorNode(Node):
             distortion=list(self.get_parameter('distortion').value),
             forward_tilt_deg=float(self.get_parameter('camera_forward_tilt_deg').value),
             offset_flu_m=list(self.get_parameter('camera_offset_flu_m').value),
+            left_tilt_deg=float(self.get_parameter('camera_left_tilt_deg').value),
         )
 
     def _write_track(self, track):

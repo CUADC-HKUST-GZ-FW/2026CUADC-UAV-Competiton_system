@@ -843,7 +843,11 @@ static cv::VideoCapture make_capture(const std::string& source, int caps_w, int 
       " ! qtdemux ! h264parse ! nvv4l2decoder enable-max-performance=1"
       " ! nvvidconv ! " + caps +
       " ! videoconvert ! video/x-raw,format=BGR"
-      " ! appsink drop=true sync=false max-buffers=2";
+      // A regular file is used for deterministic offline evaluation. Let
+      // backpressure stop the decoder instead of silently skipping frames;
+      // otherwise the processed frame counter no longer identifies the
+      // source frame used by ground-truth segment reports.
+      " ! appsink drop=false sync=false max-buffers=2";
   cv::VideoCapture cap(pipe, cv::CAP_GSTREAMER);
   if (!cap.isOpened()) cap.open(source);
   return cap;

@@ -76,7 +76,23 @@ setsid env \
 vision_pid=$!
 echo "$vision_pid" > "$RUN_DIR/recon_vision.pid"
 
-setsid bash -lc "source /opt/ros/humble/setup.bash; source '$ROS_WS/install/setup.bash'; exec ros2 launch uav_recon recon_with_mavros.launch.py fcu_url:='$FCU_URL' output_root:='$result_dir' expected_targets:='$EXPECTED_TARGETS'" \
+recon_launch=(
+  ros2 launch uav_recon recon_with_mavros.launch.py
+  "fcu_url:=$FCU_URL"
+  "output_root:=$result_dir"
+  "expected_targets:=$EXPECTED_TARGETS"
+)
+if [[ -n "${RECON_STATIC_HEIGHT_M:-}" ]]; then
+  recon_launch=(
+    ros2 launch uav_recon recon_static_with_mavros.launch.py
+    "fcu_url:=$FCU_URL"
+    "output_root:=$result_dir"
+    "fixed_relative_altitude_m:=$RECON_STATIC_HEIGHT_M"
+    "max_horizontal_radius_95_m:=${RECON_MAX_HORIZONTAL_RADIUS_95_M:-0.5}"
+  )
+fi
+
+setsid bash -lc 'source /opt/ros/humble/setup.bash; source "$1/install/setup.bash"; shift; exec "$@"' bash "$ROS_WS" "${recon_launch[@]}" \
   > "$ros_log" 2>&1 </dev/null &
 ros_pid=$!
 echo "$ros_pid" > "$RUN_DIR/recon_ros.pid"
@@ -99,6 +115,11 @@ echo "ros_log=$ros_log"
 echo "status_file=$result_dir/status.json"
 echo "confirmed_targets_file=$result_dir/confirmed_targets.json"
 echo "expected_targets=$EXPECTED_TARGETS"
+if [[ -n "${RECON_STATIC_HEIGHT_M:-}" ]]; then
+  echo "ground_altitude_mode=fixed_relative"
+  echo "fixed_relative_altitude_m=$RECON_STATIC_HEIGHT_M"
+  echo "max_horizontal_radius_95_m=${RECON_MAX_HORIZONTAL_RADIUS_95_M:-0.5}"
+fi
 if [[ -n "${YOUTH_RECORD_FILE:-}" ]]; then
   echo "record_file=$YOUTH_RECORD_FILE"
   echo "record_duration_sec=${YOUTH_RECORD_DURATION_SEC:-600}"

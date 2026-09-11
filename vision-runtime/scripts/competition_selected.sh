@@ -91,7 +91,21 @@ else
   vision_pid=$!
   echo "$vision_pid" > "$RUN_DIR/recon_vision.pid"
 
-  setsid bash -lc "source /opt/ros/humble/setup.bash; source '$ROS_WS/install/setup.bash'; exec ros2 run uav_recon recon_geolocator_node --ros-args --params-file '$ROS_WS/install/uav_recon/share/uav_recon/config/recon.yaml' -p output_root:='$result_dir'" \
+  recon_command=(
+    ros2 run uav_recon recon_geolocator_node
+    --ros-args
+    --params-file "$ROS_WS/install/uav_recon/share/uav_recon/config/recon.yaml"
+    -p "output_root:=$result_dir"
+  )
+  if [[ -n "${RECON_STATIC_HEIGHT_M:-}" ]]; then
+    recon_command+=(
+      -p ground_altitude_mode:=fixed_relative
+      -p "fixed_relative_altitude_m:=$RECON_STATIC_HEIGHT_M"
+      -p "max_horizontal_radius_95_m:=${RECON_MAX_HORIZONTAL_RADIUS_95_M:-0.5}"
+    )
+  fi
+
+  setsid bash -lc 'source /opt/ros/humble/setup.bash; source "$1/install/setup.bash"; shift; exec "$@"' bash "$ROS_WS" "${recon_command[@]}" \
     > "$ros_log" 2>&1 </dev/null &
   ros_pid=$!
   echo "$ros_pid" > "$RUN_DIR/recon_ros.pid"
@@ -134,6 +148,11 @@ echo "selector_log=$selector_log"
 echo "mavros_source=$mavros_source"
 echo "flight_control_started_by_this_script=false"
 echo "flight_command_published=false"
+if [[ -n "${RECON_STATIC_HEIGHT_M:-}" ]]; then
+  echo "ground_altitude_mode=fixed_relative"
+  echo "fixed_relative_altitude_m=$RECON_STATIC_HEIGHT_M"
+  echo "max_horizontal_radius_95_m=${RECON_MAX_HORIZONTAL_RADIUS_95_M:-0.5}"
+fi
 if [[ -n "${YOUTH_RECORD_FILE:-}" ]]; then
   echo "record_file=$YOUTH_RECORD_FILE"
   echo "record_duration_sec=${YOUTH_RECORD_DURATION_SEC:-600}"

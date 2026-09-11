@@ -41,6 +41,24 @@ def test_center_pixel_follows_yaw_to_north():
     assert abs(result.north_offset_m - 35.0 * math.tan(math.radians(20.0))) < 1e-6
 
 
+def test_positive_left_tilt_moves_center_ray_to_body_left():
+    camera = CameraModel(
+        fx=1000.0,
+        fy=1000.0,
+        cx=720.0,
+        cy=540.0,
+        distortion=[0.0] * 5,
+        forward_tilt_deg=12.0,
+        offset_flu_m=[0.0, 0.0, 0.0],
+        left_tilt_deg=4.5,
+    )
+    result = project_pixel_to_ground(
+        (720.0, 540.0), (22.0, 113.0, 35.0), (0.0, 0.0, 0.0, 1.0), 0.0, camera
+    )
+    assert abs(result.east_offset_m - 35.0 * math.tan(math.radians(12.0)) / math.cos(math.radians(4.5))) < 1e-6
+    assert abs(result.north_offset_m - 35.0 * math.tan(math.radians(4.5))) < 1e-6
+
+
 def test_image_top_is_aircraft_forward():
     center = project_pixel_to_ground(
         (720.0, 540.0), (22.0, 113.0, 35.0), (0.0, 0.0, 0.0, 1.0), 0.0, CAMERA

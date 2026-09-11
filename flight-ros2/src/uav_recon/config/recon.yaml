@@ -19,9 +19,10 @@ recon_geolocator:
     cy: 543.4421171826395
     distortion: [-0.0859352217243637, 0.15751764323036913, -0.0006214740525721936, 0.00016255105402478186, 0.168712316803506]
 
-    # Image top points toward the aircraft nose. The optical axis is down and
-    # pitched 20 degrees toward that same forward direction.
-    camera_forward_tilt_deg: 20.0
+    # Image top points toward the aircraft nose. Angles are measured from
+    # vertical-down: positive forward and positive toward body-left.
+    camera_forward_tilt_deg: 12.0
+    camera_left_tilt_deg: 4.5
     # Camera origin relative to the FCU body origin: forward, left, up in metres.
     camera_offset_flu_m: [0.418, 0.0, -0.09]
 

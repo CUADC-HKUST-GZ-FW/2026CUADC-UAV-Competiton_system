@@ -77,13 +77,20 @@ def quat_to_matrix_xyzw(q: Sequence[float]):
     )
 
 
-def camera_to_body_matrix(forward_tilt_deg: float):
-    """Return camera optical (right/down/forward) to body FLU rotation."""
+def camera_to_body_matrix(forward_tilt_deg: float, left_tilt_deg: float = 0.0):
+    """Return camera optical (right/down/forward) to body FLU rotation.
+
+    Positive forward tilt moves the optical axis toward body forward. Positive
+    left tilt rotates it toward body left around the body forward axis.
+    """
     angle = math.radians(-forward_tilt_deg)
     c, s = math.cos(angle), math.sin(angle)
     pitch_forward = ((c, 0.0, s), (0.0, 1.0, 0.0), (-s, 0.0, c))
+    angle = math.radians(left_tilt_deg)
+    c, s = math.cos(angle), math.sin(angle)
+    tilt_left = ((1.0, 0.0, 0.0), (0.0, c, -s), (0.0, s, c))
     optical_down = ((0.0, -1.0, 0.0), (-1.0, 0.0, 0.0), (0.0, 0.0, -1.0))
-    return mat_mul(pitch_forward, optical_down)
+    return mat_mul(tilt_left, mat_mul(pitch_forward, optical_down))
 
 
 def undistort_normalized(
@@ -144,6 +151,7 @@ class CameraModel:
     distortion: Sequence[float]
     forward_tilt_deg: float
     offset_flu_m: Sequence[float]
+    left_tilt_deg: float = 0.0
 
 
 @dataclass
@@ -168,7 +176,10 @@ def project_pixel_to_ground(
     )
     ray_camera = normalize3((x, y, 1.0))
     body_to_enu = quat_to_matrix_xyzw(body_to_enu_quaternion)
-    ray_body = mat_vec(camera_to_body_matrix(camera.forward_tilt_deg), ray_camera)
+    ray_body = mat_vec(
+        camera_to_body_matrix(camera.forward_tilt_deg, camera.left_tilt_deg),
+        ray_camera,
+    )
     ray_enu = normalize3(mat_vec(body_to_enu, ray_body))
     camera_offset_enu = mat_vec(body_to_enu, camera.offset_flu_m)
     camera_altitude = aircraft_lla[2] + camera_offset_enu[2]
