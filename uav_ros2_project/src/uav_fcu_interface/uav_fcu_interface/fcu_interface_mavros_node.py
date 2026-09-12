@@ -1988,6 +1988,14 @@ class FcuInterfaceMavrosNode(Node):
             self._prefix('FCU')
             + f' composite mission pull-back verified count={len(composite_waypoints)}'
         )
+        self.get_logger().info(
+            self._prefix('FULLCHAIN', 'VERIFIED')
+            + ' stage=push_verified '
+            f'total_count={len(composite_waypoints)} start_seq={start_seq} '
+            f'target_lat={abcdr["C"]["lat"]:.8f} '
+            f'target_lon={abcdr["C"]["lon"]:.8f} '
+            f'release_command_enabled={self._bool(self.release_command_enabled)}'
+        )
 
         mode_before_set_current = str(
             self.current_mode() or 'UNKNOWN'
@@ -2032,6 +2040,12 @@ class FcuInterfaceMavrosNode(Node):
             self._prefix('FCU')
             + f' mission current confirmed seq={start_seq} point={start_point} '
             f'mission_type=COMPOSITE mode_confirmed={self.current_mode()}'
+        )
+        self.get_logger().info(
+            self._prefix('FULLCHAIN', 'EXECUTING')
+            + ' stage=set_current_confirmed '
+            f'seq={start_seq} point={start_point} '
+            f'mode={self.current_mode()} mission_type=COMPOSITE'
         )
 
         return (

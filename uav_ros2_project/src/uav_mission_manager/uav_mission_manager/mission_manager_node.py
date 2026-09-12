@@ -1288,6 +1288,15 @@ class MissionManagerNode(Node):
                 f'insert_wp_index={self.insert_wp_index} '
                 f'boot_session_id={self.boot_session_id}'
             )
+            self.get_logger().info(
+                self._prefix('FULLCHAIN')
+                + ' stage=manager_received accepted=true '
+                f'lat={self.active_target["lat"]:.8f} '
+                f'lon={self.active_target["lon"]:.8f} '
+                f'heading_deg={self.active_target["heading_deg"]:.2f} '
+                f'current_seq={self.current_mission_seq} '
+                f'insert_wp_index={self.insert_wp_index}'
+            )
 
             if not self.transition_to(
                 MissionState.EXECUTING,
@@ -1346,6 +1355,12 @@ class MissionManagerNode(Node):
         )
         self.get_logger().info(
             self._prefix(state='EXECUTING') + ' goto_global request sent'
+        )
+        self.get_logger().info(
+            self._prefix('FULLCHAIN', 'EXECUTING')
+            + ' stage=goto_requested '
+            f'lat={target["lat"]:.8f} lon={target["lon"]:.8f} '
+            f'heading_deg={target["heading_deg"]:.2f}'
         )
 
     @staticmethod

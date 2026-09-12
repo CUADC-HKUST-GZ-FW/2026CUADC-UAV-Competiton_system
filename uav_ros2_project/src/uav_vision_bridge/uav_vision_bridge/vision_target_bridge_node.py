@@ -250,6 +250,13 @@ class VisionTargetBridge(Node):
             f'attempt={self.target_publish_attempts} '
             f'retry={str(bool(retry)).lower()}'
         )
+        self.get_logger().info(
+            '[FULLCHAIN] stage=coordinate_published '
+            f'source_target_id={result.target_id} '
+            f'lat={command.latitude:.8f} lon={command.longitude:.8f} '
+            f'heading_deg={command.heading_deg:.2f} '
+            f'attempt={self.target_publish_attempts}'
+        )
 
 
 def main(args=None):
