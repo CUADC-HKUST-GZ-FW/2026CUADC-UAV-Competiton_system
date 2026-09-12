@@ -5,7 +5,7 @@
 - NX163 视觉运行目录：`/home/nx163/youth-vision-runtime`
 - NX163 飞行 ROS 2 工作区：`/home/nx163/uav_ros2_project`
 - NX163 开机服务：`/etc/systemd/system/youth-vision.service`
-- Git 仓库目录：`vision-runtime/`、`flight-ros2/`、`deploy/systemd/`
+- Git 仓库目录：`youth-vision-runtime/`、`uav_ros2_project/`、`deploy/systemd/`
 
 ## 审计结果
 
@@ -15,15 +15,15 @@ NX163 另外发现 8 个未纳入统一仓库的候选文件：
 
 | 类型 | 文件 | 处理 |
 |---|---|---|
-| 运行日志 | `vision-runtime/0906.log` | 不提交 |
+| 运行日志 | `youth-vision-runtime/0906.log` | 不提交 |
 | 配置备份 | 两个 `youth_pipeline.yaml.before_*` | 不提交 |
-| 历史重复部署 | `vision-runtime/deploy_0721/` 内两个文件 | 当前仓库已有对应历史源码，不重复提交 |
-| 原飞行仓库元数据 | `flight-ros2/.gitignore`、`.gitattributes` | 由统一仓库根配置取代 |
-| 遥测残片 | `flight-ros2/mav.tlog.raw` | 不提交 |
+| 历史重复部署 | `youth-vision-runtime/deploy_0721/` 内两个文件 | 当前仓库已有对应历史源码，不重复提交 |
+| 原飞行仓库元数据 | `uav_ros2_project/.gitignore`、`.gitattributes` | 由统一仓库根配置取代 |
+| 遥测残片 | `uav_ros2_project/mav.tlog.raw` | 不提交 |
 
 没有发现只存在于 NX163、但未回收到统一 Git 仓库的新有效源码或配置。
 
-开发机中的 `jetson_fixedwing_deployment_20260810/payload/flight/uav_ros2_project` 是较早的部署副本：关键文件与 NX163 当前版本不同，并且缺少单标靶、四标靶启动脚本。它没有反向覆盖统一仓库。当前权威版本明确以 NX163 实际运行目录和本仓库 `flight-ros2/` 为准。开发机根目录的《比赛识别侦察全链路最新设置说明》与仓库 `docs/` 副本哈希一致。
+开发机中的 `jetson_fixedwing_deployment_20260810/payload/flight/uav_ros2_project` 是较早的部署副本：关键文件与 NX163 当前版本不同，并且缺少单标靶、四标靶启动脚本。它没有反向覆盖统一仓库。当前权威版本明确以 NX163 实际运行目录和本仓库 `uav_ros2_project/` 为准。开发机根目录的《比赛识别侦察全链路最新设置说明》与仓库 `docs/` 副本哈希一致。
 
 ## 关键功能核对
 

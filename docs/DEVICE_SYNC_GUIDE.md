@@ -1,55 +1,150 @@
-# NX163 与 NX164 同步原则
+# NX163、NX164 与团队电脑同步指南
 
-## 分支策略
+## 1. 唯一代码基线
 
-- `main`：两台设备共同认可、可回退的稳定基线。
-- `feature/<name>`：视觉、坐标或飞控功能开发。
-- `hotfix/<name>`：现场小范围修复。
-- 每次上机前创建带日期的 tag，并记录模型哈希和配置差异。
-
-不要为 NX163、NX164 长期维护两条相互独立的源码分支，否则相机、坐标和飞控修复会逐渐丢失同步。
-
-## 统一仓库上传入口
-
-统一仓库已转移至组织：
+唯一主仓库：
 
 ```text
-https://github.com/CUADC-HKUST-GZ-FW/2026CUADC-UAV-Competiton_system.git
+git@github.com:CUADC-HKUST-GZ-FW/2026CUADC-UAV-Competiton_system.git
 ```
 
-开发机本地仓库继续位于 `github_publish/CUADC-UAV-Recon-Fusion/`，但其 `origin`
-必须使用上述组织地址。提交前先执行 `git fetch origin` 并确认本地分支没有落后；
-只暂存本次确认过的源码路径，完成检查后再执行 `git push origin main`。
+仓库目录与两台 Jetson 的运行目录同名：
 
-NX163 的 `/home/nx163/uav_ros2_project` 是独立飞控仓库，仓库根目录与统一仓库中的
-`flight-ros2/` 子目录不同。禁止把 NX163 的 `origin` 直接改成统一仓库；应先把确认过的
-飞控源码导入开发机的 `flight-ros2/`，再由开发机提交和推送。
+| Git 目录 | Jetson 运行目录 |
+|---|---|
+| `uav_ros2_project/` | `/home/<用户>/uav_ros2_project/` |
+| `youth-vision-runtime/` | `/home/<用户>/youth-vision-runtime/` |
 
-## 必须分设备核验的内容
+当前源码基线以 NX163 实际运行代码为准。NX164 只保留用户名、相机序列号、设备生成的 TensorRT engine、网络和串口等硬件差异，不再维护另一套源码。
 
-1. Linux 用户名和 `/home/nx163`、`/home/nx164` 路径。
-2. 海康相机序列号与当前可枚举设备。
-3. TensorRT、CUDA、JetPack 版本。
-4. 三个 TensorRT engine 是否在本机生成并与配置对应。
-5. systemd 的 `User`、`WorkingDirectory` 和 `ExecStart`。
-6. FCU 串口或 UDP 地址、ROS 2 工作区和飞控配置。
-7. 相机内参、安装方向及 `camera_offset_flu_m`。
+## 2. 新笔记本首次配置
 
-## 推荐同步顺序
+先安装 Git，并让 GitHub 组织管理员把队员加入具有写权限的团队。每名队员使用自己的 SSH 密钥，不共享私钥。
 
-1. 在开发机完成拉取、代码审查和脚本语法检查。
-2. 对比目标 Jetson 当前工作树，先做备份，不覆盖现场未提交修改。
-3. 同步源码和配置，不同步 `build/install/log`。
-4. 在目标 Jetson 本机构建 ROS 2 与原生程序。
-5. 在目标 Jetson 本机生成或核验 TensorRT engine。
-6. 先检查相机枚举，再验证纯视觉链路。
-7. 之后验证侦察坐标链路；真实飞控入口必须在批准的安全环境验证。
-8. 验证通过后打 tag，并更新设备部署记录。
+```bash
+ssh-keygen -t ed25519 -C "姓名@CUADC"
+```
 
-## 禁止直接同步
+把公钥加入个人 GitHub 账号后测试：
 
-- SSH 密钥、密码和网络凭据。
-- 录像、日志、识别结果和临时 PID。
-- 另一台 Jetson 生成的 TensorRT engine。
-- ROS 2 的 `build/install/log`。
-- 未确认来源的绝对路径和旧版备份文件。
+```bash
+ssh -T git@github.com
+git clone git@github.com:CUADC-HKUST-GZ-FW/2026CUADC-UAV-Competiton_system.git
+cd 2026CUADC-UAV-Competiton_system
+```
+
+Windows PowerShell、Git Bash、WSL、Linux 和 macOS 均使用同一个仓库地址。
+
+## 3. 日常协作
+
+开始任务：
+
+```bash
+git switch main
+git fetch origin
+git pull --ff-only origin main
+git switch -c feature/姓名-任务-日期
+```
+
+完成后：
+
+```bash
+git status --short
+git diff --check
+git add <本次文件>
+git commit -m "fix: 修改目的"
+git fetch origin
+git rebase origin/main
+git push -u origin HEAD
+```
+
+在 GitHub 创建 Pull Request，经另一名队员检查和测试后合并。不要多人直接覆盖 `main`。
+
+## 4. Jetson 首次接入统一仓库
+
+分别登录 NX163 或 NX164：
+
+```bash
+ssh nx163@192.168.55.1
+# 或 ssh nx164@192.168.55.2
+```
+
+在 Jetson 上创建独立的 Git 工作副本：
+
+```bash
+cd ~
+git clone git@github.com:CUADC-HKUST-GZ-FW/2026CUADC-UAV-Competiton_system.git
+cd ~/2026CUADC-UAV-Competiton_system
+```
+
+实际运行目录继续保持：
+
+```text
+~/uav_ros2_project
+~/youth-vision-runtime
+```
+
+不要把统一仓库的 `origin` 直接设置到旧的 `~/uav_ros2_project/.git`；统一仓库是多目录仓库，根目录不同。
+
+## 5. Jetson 日常更新
+
+无论队员使用哪台笔记本，SSH 登录后的命令相同：
+
+```bash
+cd ~/2026CUADC-UAV-Competiton_system
+git switch main
+git fetch origin
+git pull --ff-only origin main
+./deploy/sync_local_jetson.sh --check
+./deploy/sync_local_jetson.sh --apply
+```
+
+`--check` 只显示差异；`--apply` 才更新运行目录，并把被覆盖文件备份到 `~/deployment_backups/`。
+
+部署脚本会：
+
+- 将两个同名源码目录同步到实际运行目录；
+- 在 NX164 上把部署副本中的 `/home/nx163/` 渲染为 `/home/nx164/`；
+- 保留本机当前相机序列号；
+- 不覆盖 engine、模型、录像、日志、识别结果及 ROS 2 的 `build/install/log`；
+- 记录最后部署的 Git commit。
+
+查看设备当前部署版本：
+
+```bash
+cat ~/.local/state/cuadc-uav/deployed.env
+```
+
+## 6. 设备上临时修复
+
+优先在 Git 工作副本创建 `hotfix/` 分支后修改，不要直接改运行目录：
+
+```bash
+cd ~/2026CUADC-UAV-Competiton_system
+git switch main
+git pull --ff-only origin main
+git switch -c hotfix/姓名-问题-日期
+```
+
+提交、推送并完成检查后，再运行同步脚本。紧急情况下若先改了运行目录，必须先把差异复制回 Git 工作副本并提交，不能只留在一台 Jetson。
+
+## 7. 每台设备必须单独核验
+
+1. Linux 用户名与 HOME。
+2. 海康相机序列号及枚举结果。
+3. JetPack、CUDA、TensorRT 版本。
+4. 三个 TensorRT engine 的文件名和 SHA-256。
+5. systemd 的 `User`、`WorkingDirectory` 与 `ExecStart`。
+6. FCU 串口或 UDP 地址、MAVROS system/component ID。
+7. 相机内参、安装角和机体偏移量。
+8. `insert_wp_index=5`、`resume_wp_index=10`。
+
+## 8. 发布前检查
+
+```bash
+git status --short
+git log -1 --oneline
+git diff --check
+```
+
+然后依次执行源码测试、ROS 2 构建、相机枚举、纯视觉验证和隔离 dry-run。真实航线改写与舵机动作只能在批准的安全条件下验证。

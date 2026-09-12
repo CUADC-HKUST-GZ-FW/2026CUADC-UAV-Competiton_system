@@ -1,9 +1,11 @@
 # ROS 2 and native build products
 **/build/
+**/build_*/
 **/install/
 **/log/
 **/logs/
 **/.colcon/
+**/.codex_backups/
 
 # Runtime state and generated results
 **/run/

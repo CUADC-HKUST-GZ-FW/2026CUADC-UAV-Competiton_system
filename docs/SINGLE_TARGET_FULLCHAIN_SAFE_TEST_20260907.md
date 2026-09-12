@@ -62,8 +62,8 @@
 
 ## 仓库内证据
 
-- `flight-ros2/src/uav_recon/test/integration_single_target_fullchain_dry_run.py`：隔离全链路测试脚本
-- `flight-ros2/src/uav_mission_manager/test/test_mission_safety.py`：任务安全门控测试
-- `flight-ros2/src/uav_fcu_interface/uav_fcu_interface/test_abcdr_mission.py`：航线构造与写入事务测试
+- `uav_ros2_project/src/uav_recon/test/integration_single_target_fullchain_dry_run.py`：隔离全链路测试脚本
+- `uav_ros2_project/src/uav_mission_manager/test/test_mission_safety.py`：任务安全门控测试
+- `uav_ros2_project/src/uav_fcu_interface/uav_fcu_interface/test_abcdr_mission.py`：航线构造与写入事务测试
 
 设备原始日志保存在开发机诊断目录，不提交 Git，避免把运行日志混入源码仓库。
