@@ -1,19 +1,22 @@
 [Unit]
-Description=Youth Vision Static Competition Recon (image, fixed 11.5 m)
+Description=NX163 single-target image recognition and UAV fusion chain
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
+Type=simple
 User=nx163
-WorkingDirectory=/home/nx163/youth-vision-runtime
-ExecStart=/home/nx163/youth-vision-runtime/scripts/competition_selected_static.sh image 11.5
-ExecStop=/home/nx163/youth-vision-runtime/scripts/stop_recon_pipeline.sh
+Environment=HOME=/home/nx163
+Environment=UAV_FOREGROUND=1
+WorkingDirectory=/home/nx163/uav_ros2_project
+ExecStart=/home/nx163/uav_ros2_project/scripts/start_single_target_fusion.sh image 0.00
 Restart=on-failure
 RestartSec=10
-KillMode=control-group
-TimeoutStopSec=15
+KillMode=mixed
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=youth-vision
 
 [Install]
 WantedBy=multi-user.target
