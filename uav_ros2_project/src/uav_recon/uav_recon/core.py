@@ -142,6 +142,19 @@ def geodetic_delta_m(latitude0: float, longitude0: float, latitude: float, longi
     return east, north
 
 
+def propagate_geodetic_with_local_delta(
+    anchor_lla: Sequence[float],
+    anchor_local_enu_m: Sequence[float],
+    frame_local_enu_m: Sequence[float],
+):
+    """Propagate a global RTK anchor using an EKF-local ENU displacement."""
+    east = frame_local_enu_m[0] - anchor_local_enu_m[0]
+    north = frame_local_enu_m[1] - anchor_local_enu_m[1]
+    up = frame_local_enu_m[2] - anchor_local_enu_m[2]
+    latitude, longitude = enu_to_geodetic(anchor_lla[0], anchor_lla[1], east, north)
+    return latitude, longitude, anchor_lla[2] + up
+
+
 @dataclass
 class CameraModel:
     fx: float
@@ -211,19 +224,32 @@ class TimedBuffer(Generic[T]):
         while self.values and self.values[0].timestamp < cutoff:
             self.values.popleft()
 
-    def interpolate(self, timestamp: float, fn: Callable[[T, T, float], T], max_gap_sec: float) -> Optional[T]:
-        if not self.values:
-            return None
+    def bracket(self, timestamp: float):
+        """Return samples around timestamp, scanning from the newest sample."""
         before = None
         after = None
-        for item in self.values:
-            if item.timestamp <= timestamp:
-                before = item
-            if item.timestamp >= timestamp:
+        for item in reversed(self.values):
+            if item.timestamp == timestamp:
+                return item, item
+            if item.timestamp > timestamp:
                 after = item
-                break
+                continue
+            before = item
+            break
+        return before, after
+
+    def interpolate(
+        self,
+        timestamp: float,
+        fn: Callable[[T, T, float], T],
+        max_gap_sec: float,
+    ) -> Optional[T]:
+        before, after = self.bracket(timestamp)
         if before and after:
-            if timestamp - before.timestamp > max_gap_sec or after.timestamp - timestamp > max_gap_sec:
+            if (
+                timestamp - before.timestamp > max_gap_sec
+                or after.timestamp - timestamp > max_gap_sec
+            ):
                 return None
             if after.timestamp == before.timestamp:
                 return before.value
@@ -241,16 +267,7 @@ class TimedBuffer(Generic[T]):
         max_gap_sec: float,
     ) -> Optional[T]:
         """Interpolate only when samples exist on both sides of the timestamp."""
-        if not self.values:
-            return None
-        before = None
-        after = None
-        for item in self.values:
-            if item.timestamp <= timestamp:
-                before = item
-            if item.timestamp >= timestamp:
-                after = item
-                break
+        before, after = self.bracket(timestamp)
         if before is None or after is None:
             return None
         if timestamp - before.timestamp > max_gap_sec or after.timestamp - timestamp > max_gap_sec:
@@ -263,15 +280,47 @@ class TimedBuffer(Generic[T]):
     def has_sample_at_or_after(self, timestamp: float) -> bool:
         return bool(self.values and self.values[-1].timestamp >= timestamp)
 
-    def nearest(self, timestamp: float, max_gap_sec: float) -> Optional[T]:
-        if not self.values:
+    def latest_at_or_before(self, timestamp: float, max_age_sec: float) -> Optional[TimedValue[T]]:
+        for item in reversed(self.values):
+            if item.timestamp <= timestamp:
+                return item if timestamp - item.timestamp <= max_age_sec else None
+        return None
+
+    def nearest_sample(self, timestamp: float, max_gap_sec: float) -> Optional[TimedValue[T]]:
+        before, after = self.bracket(timestamp)
+        candidates = [item for item in (before, after) if item is not None]
+        if not candidates:
             return None
-        item = min(self.values, key=lambda sample: abs(sample.timestamp - timestamp))
-        return item.value if abs(item.timestamp - timestamp) <= max_gap_sec else None
+        item = min(candidates, key=lambda sample: abs(sample.timestamp - timestamp))
+        return item if abs(item.timestamp - timestamp) <= max_gap_sec else None
+
+    def nearest(self, timestamp: float, max_gap_sec: float) -> Optional[T]:
+        item = self.nearest_sample(timestamp, max_gap_sec)
+        return None if item is None else item.value
 
 
 def lerp_tuple(a: Sequence[float], b: Sequence[float], ratio: float):
     return tuple(x + ratio * (y - x) for x, y in zip(a, b))
+
+
+def hermite_tuple(
+    position0: Sequence[float],
+    velocity0: Sequence[float],
+    position1: Sequence[float],
+    velocity1: Sequence[float],
+    ratio: float,
+    duration_sec: float,
+):
+    """Interpolate position using endpoint positions and velocities."""
+    t = clamp(ratio, 0.0, 1.0)
+    h00 = 2.0 * t ** 3 - 3.0 * t ** 2 + 1.0
+    h10 = t ** 3 - 2.0 * t ** 2 + t
+    h01 = -2.0 * t ** 3 + 3.0 * t ** 2
+    h11 = t ** 3 - t ** 2
+    return tuple(
+        h00 * p0 + h10 * duration_sec * v0 + h01 * p1 + h11 * duration_sec * v1
+        for p0, v0, p1, v1 in zip(position0, velocity0, position1, velocity1)
+    )
 
 
 @dataclass
@@ -288,6 +337,10 @@ class Observation:
     crop_path: str
     horizontal_sigma_m: float = 0.0
     center_distance_norm: float = 0.0
+    position_source: str = 'global_interpolation'
+    global_anchor_age_sec: float = 0.0
+    local_position_method: str = 'none'
+    local_delta_enu_m: Sequence[float] = field(default_factory=lambda: (0.0, 0.0, 0.0))
 
 
 def image_center_weight(

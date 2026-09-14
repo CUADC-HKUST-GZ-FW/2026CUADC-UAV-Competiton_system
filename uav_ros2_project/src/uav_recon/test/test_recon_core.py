@@ -6,10 +6,12 @@ from uav_recon.core import (
     TimedBuffer,
     Track,
     geodetic_delta_m,
+    hermite_tuple,
     image_center_weight,
     is_empty_target_label,
     lerp_tuple,
     project_pixel_to_ground,
+    propagate_geodetic_with_local_delta,
 )
 
 
@@ -97,6 +99,44 @@ def test_timed_buffer_bracketed_interpolation_rejects_one_sided_sample():
     buffer.add(12.0, (2.0, 4.0))
     assert buffer.has_sample_at_or_after(10.5)
     assert buffer.interpolate_bracketed(11.0, lerp_tuple, 2.0) == (1.0, 3.0)
+
+
+def test_timed_buffer_finds_latest_anchor_at_or_before_timestamp():
+    buffer = TimedBuffer()
+    buffer.add(10.0, 'old')
+    buffer.add(10.2, 'anchor')
+    buffer.add(10.4, 'future')
+
+    sample = buffer.latest_at_or_before(10.3, 0.11)
+    assert sample is not None
+    assert sample.timestamp == 10.2
+    assert sample.value == 'anchor'
+    assert buffer.latest_at_or_before(10.3, 0.09) is None
+
+
+def test_hermite_position_interpolation_matches_constant_velocity():
+    result = hermite_tuple(
+        (0.0, 10.0, 2.0),
+        (20.0, -2.0, 1.0),
+        (2.0, 9.8, 2.1),
+        (20.0, -2.0, 1.0),
+        0.5,
+        0.1,
+    )
+    assert result == (1.0, 9.9, 2.05)
+
+
+def test_rtk_anchor_is_propagated_by_local_enu_delta():
+    anchor = (22.0, 113.0, 35.0)
+    propagated = propagate_geodetic_with_local_delta(
+        anchor,
+        (100.0, 200.0, 20.0),
+        (105.0, 197.0, 21.5),
+    )
+    east, north = geodetic_delta_m(anchor[0], anchor[1], propagated[0], propagated[1])
+    assert abs(east - 5.0) < 1e-6
+    assert abs(north + 3.0) < 1e-6
+    assert propagated[2] == 36.5
 
 
 def test_track_fusion_rejects_large_outlier():

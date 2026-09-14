@@ -9,7 +9,7 @@ import shutil
 import tempfile
 import time
 
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, TwistStamped
 from mavros_msgs.msg import GPSRAW
 from mavros_msgs.srv import MessageInterval, StreamRate
 import rclpy
@@ -25,9 +25,12 @@ from .core import (
     Observation,
     TimedBuffer,
     TrackManager,
+    geodetic_delta_m,
+    hermite_tuple,
     is_empty_target_label,
     lerp_tuple,
     project_pixel_to_ground,
+    propagate_geodetic_with_local_delta,
     quat_slerp,
 )
 
@@ -75,8 +78,12 @@ class ReconGeolocatorNode(Node):
         self.positions = TimedBuffer(15.0)
         self.attitudes = TimedBuffer(15.0)
         self.local_pose_attitudes = TimedBuffer(15.0)
-        self.position_arrivals = deque(maxlen=30)
-        self.attitude_arrivals = deque(maxlen=30)
+        self.local_positions = TimedBuffer(15.0)
+        self.local_velocities = TimedBuffer(15.0)
+        self.position_arrivals = deque(maxlen=120)
+        self.attitude_arrivals = deque(maxlen=120)
+        self.local_position_arrivals = deque(maxlen=240)
+        self.local_velocity_arrivals = deque(maxlen=240)
         self.relative_altitudes = TimedBuffer(15.0)
         self.rtk_fixes = TimedBuffer(15.0)
         self.tracks = TrackManager(float(self.get_parameter('association_radius_m').value))
@@ -107,6 +114,12 @@ class ReconGeolocatorNode(Node):
             qos_profile_sensor_data,
         )
         self.create_subscription(
+            TwistStamped,
+            self.get_parameter('local_velocity_topic').value,
+            self._velocity_callback,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
             Float64,
             self.get_parameter('relative_altitude_topic').value,
             self._relative_altitude_callback,
@@ -123,10 +136,13 @@ class ReconGeolocatorNode(Node):
         )
         self.stream_rate_client = self.create_client(StreamRate, '/mavros/set_stream_rate')
         self.global_position_rate_future = None
+        self.local_position_rate_future = None
         self.attitude_stream_rate_future = None
         self.global_position_rate_configured = False
+        self.local_position_rate_configured = False
         self.attitude_stream_rate_configured = False
         self.last_global_position_rate_request = 0.0
+        self.last_local_position_rate_request = 0.0
         self.last_attitude_stream_rate_request = 0.0
         self.create_timer(1.0, self._configure_mavlink_rates)
         poll_period = 1.0 / max(1.0, float(self.get_parameter('manifest_poll_hz').value))
@@ -134,7 +150,8 @@ class ReconGeolocatorNode(Node):
         self.get_logger().info(
             f'recon ready: manifest={self.manifest_path}, output={self.output_root}, '
             f'camera tilt={self.get_parameter("camera_forward_tilt_deg").value:.1f} deg forward, '
-            f'{self.get_parameter("camera_left_tilt_deg").value:.1f} deg left'
+            f'{self.get_parameter("camera_left_tilt_deg").value:.1f} deg left, '
+            f'position={self.get_parameter("position_solution_mode").value}'
         )
 
     def _declare_parameters(self):
@@ -145,13 +162,21 @@ class ReconGeolocatorNode(Node):
             'global_position_topic': '/mavros/global_position/global',
             'imu_topic': '/mavros/imu/data',
             'local_pose_topic': '/mavros/local_position/pose',
+            'local_velocity_topic': '/mavros/local_position/velocity_local',
             'relative_altitude_topic': '/mavros/global_position/rel_alt',
             'gps_raw_topic': '/mavros/gpsstatus/gps1/raw',
             'manifest_poll_hz': 40.0,
             'configure_mavlink_rates': True,
-            'global_position_rate_hz': 20.0,
-            'attitude_stream_rate_hz': 20,
-            'mavlink_rate_retry_sec': 5.0,
+            'global_position_rate_hz': 10.0,
+            'local_position_rate_hz': 60.0,
+            'attitude_stream_rate_hz': 60,
+            'mavlink_rate_retry_sec': 30.0,
+            'position_solution_mode': 'rtk_anchor_local_delta',
+            'global_anchor_max_age_sec': 0.35,
+            'local_position_max_gap_sec': 0.12,
+            'local_velocity_max_gap_sec': 0.12,
+            'local_delta_max_speed_mps': 80.0,
+            'local_global_disagreement_max_m': 5.0,
             'telemetry_max_gap_sec': 0.35,
             'rtk_max_gap_sec': 0.35,
             'max_pending_manifests': 120,
@@ -191,8 +216,18 @@ class ReconGeolocatorNode(Node):
         self.positions.add(message_time(message), (message.latitude, message.longitude, message.altitude))
 
     def _pose_callback(self, message):
+        timestamp = message_time(message)
+        p = message.pose.position
         q = message.pose.orientation
-        self.local_pose_attitudes.add(message_time(message), (q.x, q.y, q.z, q.w))
+        self.local_position_arrivals.append(time.monotonic())
+        self.local_positions.add(timestamp, (p.x, p.y, p.z))
+        self.local_pose_attitudes.add(timestamp, (q.x, q.y, q.z, q.w))
+
+    def _velocity_callback(self, message):
+        timestamp = message_time(message)
+        velocity = message.twist.linear
+        self.local_velocity_arrivals.append(time.monotonic())
+        self.local_velocities.add(timestamp, (velocity.x, velocity.y, velocity.z))
 
     def _imu_callback(self, message):
         q = message.orientation
@@ -214,8 +249,12 @@ class ReconGeolocatorNode(Node):
         now = time.monotonic()
         retry_sec = float(self.get_parameter('mavlink_rate_retry_sec').value)
         position_target = float(self.get_parameter('global_position_rate_hz').value)
+        local_position_target = float(self.get_parameter('local_position_rate_hz').value)
         attitude_target = float(self.get_parameter('attitude_stream_rate_hz').value)
         position_rate_low = self._observed_rate_hz(self.position_arrivals) < position_target * 0.8
+        local_position_rate_low = (
+            self._observed_rate_hz(self.local_position_arrivals) < local_position_target * 0.8
+        )
         attitude_rate_low = self._observed_rate_hz(self.attitude_arrivals) < attitude_target * 0.8
         if (
             position_rate_low
@@ -229,6 +268,18 @@ class ReconGeolocatorNode(Node):
             self.last_global_position_rate_request = now
             self.global_position_rate_future = self.message_interval_client.call_async(request)
             self.global_position_rate_future.add_done_callback(self._global_position_rate_response)
+        if (
+            local_position_rate_low
+            and self.local_position_rate_future is None
+            and self.message_interval_client.service_is_ready()
+            and now - self.last_local_position_rate_request >= retry_sec
+        ):
+            request = MessageInterval.Request()
+            request.message_id = 32  # MAVLink LOCAL_POSITION_NED, converted to ROS ENU by MAVROS.
+            request.message_rate = local_position_target
+            self.last_local_position_rate_request = now
+            self.local_position_rate_future = self.message_interval_client.call_async(request)
+            self.local_position_rate_future.add_done_callback(self._local_position_rate_response)
         if (
             attitude_rate_low
             and self.attitude_stream_rate_future is None
@@ -266,14 +317,33 @@ class ReconGeolocatorNode(Node):
         finally:
             self.global_position_rate_future = None
 
+    def _local_position_rate_response(self, future):
+        try:
+            response = future.result()
+            self.local_position_rate_configured = bool(response.success)
+            if self.local_position_rate_configured:
+                self.get_logger().info(
+                    f'FCU local EKF position rate requested at '
+                    f'{self.get_parameter("local_position_rate_hz").value:.1f} Hz'
+                )
+            else:
+                self.get_logger().warn('FCU rejected the LOCAL_POSITION_NED rate request')
+        except Exception as error:  # noqa: BLE001 - ROS future reports transport errors here.
+            self.get_logger().warn(f'local position rate request failed: {error}')
+        finally:
+            self.local_position_rate_future = None
+
     def _attitude_stream_rate_response(self, future):
         try:
-            future.result()
-            self.attitude_stream_rate_configured = True
-            self.get_logger().info(
-                f'FCU attitude stream requested at '
-                f'{self.get_parameter("attitude_stream_rate_hz").value} Hz'
-            )
+            response = future.result()
+            self.attitude_stream_rate_configured = bool(response.success)
+            if self.attitude_stream_rate_configured:
+                self.get_logger().info(
+                    f'FCU attitude stream requested at '
+                    f'{self.get_parameter("attitude_stream_rate_hz").value} Hz'
+                )
+            else:
+                self.get_logger().warn('FCU rejected the attitude stream rate request')
         except Exception as error:  # noqa: BLE001 - ROS future reports transport errors here.
             self.get_logger().warn(f'attitude stream rate request failed: {error}')
         finally:
@@ -289,6 +359,12 @@ class ReconGeolocatorNode(Node):
             'detail': detail or '',
             'rtk_required': True,
             'coordinate_valid': False,
+            'telemetry_rates_hz': {
+                'rtk_global': round(self._observed_rate_hz(self.position_arrivals), 1),
+                'local_position': round(self._observed_rate_hz(self.local_position_arrivals), 1),
+                'local_velocity': round(self._observed_rate_hz(self.local_velocity_arrivals), 1),
+                'attitude': round(self._observed_rate_hz(self.attitude_arrivals), 1),
+            },
         }
         atomic_json(self.status_path, record)
         if status != self.last_status:
@@ -330,37 +406,156 @@ class ReconGeolocatorNode(Node):
                 return
             self.pending_manifests.popleft()
 
+    def _local_position_at(self, timestamp):
+        max_gap = float(self.get_parameter('local_position_max_gap_sec').value)
+        before, after = self.local_positions.bracket(timestamp)
+        if before is None or after is None:
+            return None, 'unavailable'
+        if timestamp - before.timestamp > max_gap or after.timestamp - timestamp > max_gap:
+            return None, 'gap_exceeded'
+        if before.timestamp == after.timestamp:
+            return before.value, 'sample'
+
+        ratio = (timestamp - before.timestamp) / (after.timestamp - before.timestamp)
+        velocity_gap = float(self.get_parameter('local_velocity_max_gap_sec').value)
+        velocity0 = self.local_velocities.nearest(before.timestamp, velocity_gap)
+        velocity1 = self.local_velocities.nearest(after.timestamp, velocity_gap)
+        if velocity0 is not None and velocity1 is not None:
+            return (
+                hermite_tuple(
+                    before.value,
+                    velocity0,
+                    after.value,
+                    velocity1,
+                    ratio,
+                    after.timestamp - before.timestamp,
+                ),
+                'cubic_hermite',
+            )
+        return lerp_tuple(before.value, after.value, ratio), 'linear'
+
+    def _resolve_aircraft_position(self, timestamp, max_gap):
+        global_interpolated = self.positions.interpolate_bracketed(timestamp, lerp_tuple, max_gap)
+        fallback = {
+            'position_source': 'global_interpolation',
+            'global_anchor_age_sec': 0.0,
+            'global_anchor_timestamp_unix_s': timestamp,
+            'global_anchor_lla': global_interpolated,
+            'local_position_method': 'none',
+            'local_delta_enu_m': (0.0, 0.0, 0.0),
+            'global_local_disagreement_m': 0.0,
+        }
+        if str(self.get_parameter('position_solution_mode').value) != 'rtk_anchor_local_delta':
+            waiting = global_interpolated is None and not self.positions.has_sample_at_or_after(
+                timestamp
+            )
+            return global_interpolated, fallback, waiting
+
+        anchor_max_age = float(self.get_parameter('global_anchor_max_age_sec').value)
+        anchor = self.positions.latest_at_or_before(timestamp, anchor_max_age)
+        if anchor is None:
+            waiting = global_interpolated is None and not self.positions.has_sample_at_or_after(
+                timestamp
+            )
+            return global_interpolated, fallback, waiting
+
+        frame_local, frame_method = self._local_position_at(timestamp)
+        anchor_local, anchor_method = self._local_position_at(anchor.timestamp)
+        if frame_local is None or anchor_local is None:
+            waiting = global_interpolated is None and not (
+                self.local_positions.has_sample_at_or_after(timestamp)
+                and self.positions.has_sample_at_or_after(timestamp)
+            )
+            return global_interpolated, fallback, waiting
+
+        delta = tuple(frame - origin for frame, origin in zip(frame_local, anchor_local))
+        age = max(0.0, timestamp - anchor.timestamp)
+        distance = math.sqrt(sum(component * component for component in delta))
+        speed_limit = float(self.get_parameter('local_delta_max_speed_mps').value)
+        allowed_distance = max(1.0, speed_limit * max(age, 0.02))
+        if distance > allowed_distance:
+            self.get_logger().warn(
+                f'local EKF displacement rejected: {distance:.2f} m in {age:.3f} s '
+                f'(limit {allowed_distance:.2f} m)'
+            )
+            waiting = global_interpolated is None and not self.positions.has_sample_at_or_after(
+                timestamp
+            )
+            return global_interpolated, fallback, waiting
+
+        propagated = propagate_geodetic_with_local_delta(anchor.value, anchor_local, frame_local)
+        disagreement = 0.0
+        if global_interpolated is not None:
+            east, north = geodetic_delta_m(
+                global_interpolated[0],
+                global_interpolated[1],
+                propagated[0],
+                propagated[1],
+            )
+            disagreement = math.hypot(east, north)
+            disagreement_limit = float(
+                self.get_parameter('local_global_disagreement_max_m').value
+            )
+            if disagreement > disagreement_limit:
+                self.get_logger().warn(
+                    f'local/global position disagreement {disagreement:.2f} m exceeds '
+                    f'{disagreement_limit:.2f} m; using global interpolation'
+                )
+                return global_interpolated, fallback, False
+
+        context = {
+            'position_source': 'rtk_anchor_local_delta',
+            'global_anchor_age_sec': age,
+            'global_anchor_timestamp_unix_s': anchor.timestamp,
+            'global_anchor_lla': anchor.value,
+            'local_position_method': f'{anchor_method}+{frame_method}',
+            'local_delta_enu_m': delta,
+            'global_local_disagreement_m': disagreement,
+        }
+        return propagated, context, False
+
     def _process_manifest(self, manifest):
         capture_ns = int(manifest['capture_timestamp_unix_ns'])
         capture_time = capture_ns * 1e-9
         max_gap = float(self.get_parameter('telemetry_max_gap_sec').value)
         rtk_max_gap = float(self.get_parameter('rtk_max_gap_sec').value)
 
-        has_position_after = self.positions.has_sample_at_or_after(capture_time)
         has_attitude_after = (
             self.attitudes.has_sample_at_or_after(capture_time)
             or self.local_pose_attitudes.has_sample_at_or_after(capture_time)
         )
-        has_fix_after = self.rtk_fixes.has_sample_at_or_after(capture_time)
-        mode = str(self.get_parameter('ground_altitude_mode').value)
-        has_altitude_after = (
-            mode != 'home_relative'
-            or self.relative_altitudes.has_sample_at_or_after(capture_time)
-        )
-        if not (has_position_after and has_attitude_after and has_fix_after and has_altitude_after):
+        if not has_attitude_after:
             self._set_status(
                 'waiting_for_fcu_telemetry',
-                f'waiting for telemetry after camera timestamp; pending={len(self.pending_manifests)}',
+                f'waiting for attitude after camera timestamp; '
+                f'pending={len(self.pending_manifests)}',
             )
             return False
 
-        position = self.positions.interpolate_bracketed(capture_time, lerp_tuple, max_gap)
+        position, position_context, position_pending = self._resolve_aircraft_position(
+            capture_time, max_gap
+        )
+        if position_pending:
+            self._set_status(
+                'waiting_for_fcu_telemetry',
+                f'waiting for frame-time position; pending={len(self.pending_manifests)}',
+            )
+            return False
         attitude = self.attitudes.interpolate_bracketed(capture_time, quat_slerp, max_gap)
         if attitude is None:
             attitude = self.local_pose_attitudes.interpolate_bracketed(
                 capture_time, quat_slerp, max_gap
             )
-        fix = self.rtk_fixes.nearest(capture_time, rtk_max_gap)
+        fix_sample = self.rtk_fixes.latest_at_or_before(capture_time, rtk_max_gap)
+        if fix_sample is None and not self.rtk_fixes.has_sample_at_or_after(capture_time):
+            self._set_status(
+                'waiting_for_fcu_telemetry',
+                f'waiting for RTK status; pending={len(self.pending_manifests)}',
+            )
+            return False
+        fix = fix_sample.value if fix_sample is not None else self.rtk_fixes.nearest(
+            capture_time, rtk_max_gap
+        )
         if position is None or attitude is None:
             self._set_status(
                 'telemetry_alignment_rejected',
@@ -379,8 +574,19 @@ class ReconGeolocatorNode(Node):
         if not bool(self.get_parameter('calibration_valid').value):
             self._set_status('waiting_for_camera_calibration', 'calibration_valid is false')
             return True
-        ground_altitude = self._ground_altitude(capture_time, position[2], max_gap)
+        mode = str(self.get_parameter('ground_altitude_mode').value)
+        ground_altitude = self._ground_altitude(
+            capture_time, position[2], max_gap, position_context
+        )
         if ground_altitude is None:
+            if mode == 'home_relative' and not self.relative_altitudes.has_sample_at_or_after(
+                capture_time
+            ):
+                self._set_status(
+                    'waiting_for_fcu_telemetry',
+                    f'waiting for relative altitude; pending={len(self.pending_manifests)}',
+                )
+                return False
             self._set_status(
                 'telemetry_alignment_rejected',
                 f'no bracketing ground-altitude sample for mode={mode}',
@@ -428,17 +634,25 @@ class ReconGeolocatorNode(Node):
                         (float(center[1]) - frame_height * 0.5) / (frame_height * 0.5),
                     ),
                 ),
+                position_source=position_context['position_source'],
+                global_anchor_age_sec=position_context['global_anchor_age_sec'],
+                local_position_method=position_context['local_position_method'],
+                local_delta_enu_m=position_context['local_delta_enu_m'],
             )
             track = self.tracks.add(observation)
             self._write_track(track)
             projected += 1
         if projected:
-            self._set_status('tracking', f'projected={projected}, tracks={len(self.tracks.tracks)}')
+            self._set_status(
+                'tracking',
+                f'projected={projected}, tracks={len(self.tracks.tracks)}, '
+                f'position={position_context["position_source"]}',
+            )
         else:
             self._set_status('waiting_for_target', 'manifest contains no usable target crops')
         return True
 
-    def _ground_altitude(self, timestamp, aircraft_altitude, max_gap):
+    def _ground_altitude(self, timestamp, aircraft_altitude, max_gap, position_context):
         mode = str(self.get_parameter('ground_altitude_mode').value)
         if mode == 'fixed_msl':
             return float(self.get_parameter('fixed_ground_altitude_msl_m').value)
@@ -448,7 +662,15 @@ class ReconGeolocatorNode(Node):
                 return None
             return aircraft_altitude - relative
         if mode == 'home_relative':
-            relative = self.relative_altitudes.interpolate_bracketed(
+            if position_context['position_source'] == 'rtk_anchor_local_delta':
+                anchor_time = position_context['global_anchor_timestamp_unix_s']
+                anchor_lla = position_context['global_anchor_lla']
+                relative = self.relative_altitudes.nearest(
+                    anchor_time,
+                    float(self.get_parameter('global_anchor_max_age_sec').value),
+                )
+                return None if relative is None else anchor_lla[2] - relative
+            relative = self.relative_altitudes.interpolate(
                 timestamp, lambda a, b, r: a + r * (b - a), max_gap
             )
             return None if relative is None else aircraft_altitude - relative
@@ -506,6 +728,22 @@ class ReconGeolocatorNode(Node):
             'coordinate_fusion': {
                 'method': 'confidence_pose_image_center_weighted_mean',
                 'mean_center_weight': round(fused['mean_center_weight'], 6),
+            },
+            'telemetry_alignment': {
+                'position_source': best.position_source,
+                'global_anchor_age_sec': round(best.global_anchor_age_sec, 6),
+                'local_position_method': best.local_position_method,
+                'local_delta_enu_m': [round(float(value), 4) for value in best.local_delta_enu_m],
+                'observed_rates_hz': {
+                    'rtk_global': round(self._observed_rate_hz(self.position_arrivals), 1),
+                    'local_position': round(
+                        self._observed_rate_hz(self.local_position_arrivals), 1
+                    ),
+                    'local_velocity': round(
+                        self._observed_rate_hz(self.local_velocity_arrivals), 1
+                    ),
+                    'attitude': round(self._observed_rate_hz(self.attitude_arrivals), 1),
+                },
             },
             'rtk_fixed': True,
             'valid': valid,

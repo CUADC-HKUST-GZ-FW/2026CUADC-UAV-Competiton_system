@@ -19,10 +19,10 @@ recon_geolocator:
     cy: 543.4421171826395
     distortion: [-0.0859352217243637, 0.15751764323036913, -0.0006214740525721936, 0.00016255105402478186, 0.168712316803506]
 
-    # Image top points toward the aircraft nose. Angles are measured from
-    # vertical-down: positive forward and positive toward body-left.
-    camera_forward_tilt_deg: 12.0
-    camera_left_tilt_deg: 4.5
+    # Image top points toward the aircraft nose. The optical axis is 70 degrees
+    # below horizontal, equivalent to 20 degrees forward from vertical-down.
+    camera_forward_tilt_deg: 20.0
+    camera_left_tilt_deg: 0.0
     # Camera origin relative to the FCU body origin: forward, left, up in metres.
     camera_offset_flu_m: [0.418, 0.0, -0.09]
 
@@ -31,12 +31,21 @@ recon_geolocator:
     ground_altitude_mode: home_relative
     fixed_ground_altitude_msl_m: 0.0
 
-    # FCU GLOBAL_POSITION_INT and EXTRA1 attitude are requested at 20 Hz.
-    # Camera events wait for telemetry on both sides before interpolation.
+    # Keep RTK global data as the 5-10 Hz absolute anchor. Propagate each frame
+    # from that anchor with the MAVROS ENU local EKF position; velocity is used
+    # for cubic Hermite interpolation between local-position samples.
     configure_mavlink_rates: true
-    global_position_rate_hz: 20.0
-    attitude_stream_rate_hz: 20
-    mavlink_rate_retry_sec: 5.0
+    global_position_rate_hz: 10.0
+    local_position_rate_hz: 60.0
+    attitude_stream_rate_hz: 60
+    mavlink_rate_retry_sec: 30.0
+    position_solution_mode: rtk_anchor_local_delta
+    local_velocity_topic: /mavros/local_position/velocity_local
+    global_anchor_max_age_sec: 0.35
+    local_position_max_gap_sec: 0.12
+    local_velocity_max_gap_sec: 0.12
+    local_delta_max_speed_mps: 80.0
+    local_global_disagreement_max_m: 5.0
     telemetry_max_gap_sec: 0.12
     rtk_max_gap_sec: 0.35
     max_pending_manifests: 120
