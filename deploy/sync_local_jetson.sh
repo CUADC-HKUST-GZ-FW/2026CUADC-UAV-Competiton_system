@@ -58,6 +58,35 @@ if [[ -f "${active_vision_config}" ]]; then
     )"
 fi
 
+# Camera calibration and installation geometry belong to the physical device.
+# Preserve them while shared algorithms and operating thresholds are updated.
+active_recon_config="${UAV_DEST}/src/uav_recon/config/recon.yaml"
+hardware_recon_keys=(
+    calibration_valid
+    calibration_width
+    calibration_height
+    fx
+    fy
+    cx
+    cy
+    distortion
+    camera_forward_tilt_deg
+    camera_left_tilt_deg
+    camera_offset_flu_m
+)
+declare -A hardware_recon_values=()
+if [[ -f "${active_recon_config}" ]]; then
+    for key in "${hardware_recon_keys[@]}"; do
+        value="$(
+            sed -n "s/^[[:space:]]*${key}:[[:space:]]*//p" \
+                "${active_recon_config}" | head -n 1
+        )"
+        if [[ -n "${value}" ]]; then
+            hardware_recon_values["${key}"]="${value}"
+        fi
+    done
+fi
+
 common_excludes=(
     --exclude=.git/
     --exclude=build/
@@ -149,6 +178,17 @@ if [[ -n "${camera_serial}" && -f "${active_vision_config}" ]]; then
         "${active_vision_config}"
 fi
 
+if [[ -f "${active_recon_config}" ]]; then
+    for key in "${hardware_recon_keys[@]}"; do
+        if [[ -v "hardware_recon_values[${key}]" ]]; then
+            value="${hardware_recon_values[${key}]}"
+            sed -i \
+                "s#^\([[:space:]]*${key}:[[:space:]]*\).*#\1${value}#" \
+                "${active_recon_config}"
+        fi
+    done
+fi
+
 mkdir -p -- "${DEVICE_HOME}/.local/state/cuadc-uav"
 cat >"${DEVICE_HOME}/.local/state/cuadc-uav/deployed.env" <<EOF
 REPOSITORY=CUADC-HKUST-GZ-FW/2026CUADC-UAV-Competiton_system
@@ -160,4 +200,5 @@ EOF
 
 echo "[OK] live directories updated from ${COMMIT}."
 echo "[OK] overwritten files backed up under ${BACKUP_ROOT}."
+echo "[OK] device camera serial, intrinsics, distortion, and extrinsics preserved."
 echo "[NEXT] rebuild uav_ros2_project and run the approved dry-run checks."
