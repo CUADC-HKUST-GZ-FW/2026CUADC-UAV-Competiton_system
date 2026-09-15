@@ -94,7 +94,9 @@ fi
 echo "[INFO] rebuilding ${LIVE_UAV_ROOT}..."
 # setup.bash is supplied by ROS 2 and intentionally modifies the shell environment.
 # shellcheck disable=SC1090
+set +u
 source "${ros_setup}"
+set -u
 cd "${LIVE_UAV_ROOT}"
 colcon build --symlink-install
 
