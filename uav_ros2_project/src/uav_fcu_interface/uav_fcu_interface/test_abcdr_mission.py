@@ -1,4 +1,4 @@
-"""A-B-R-C-D几何、mission顺序和载荷安全门测试。"""
+"""A-B(virtual)-U-R-C(virtual)-D geometry and mission safety tests."""
 
 import asyncio
 import math
@@ -16,6 +16,7 @@ def make_node_without_ros():
     node = FcuInterfaceMavrosNode.__new__(FcuInterfaceMavrosNode)
     node.a_offset_m = 160.0
     node.b_offset_m = 95.0
+    node.u_offset_m = 75.0
     node.release_offset_m = 56.0
     node.d_offset_m = 160.0
     node.a_acceptance_radius_m = 30.0
@@ -40,14 +41,38 @@ def make_node_without_ros():
     node.gps_history = deque(maxlen=20)
     node._last_b_check_pending_log_time = 0.0
     node._gps_lock = threading.Lock()
+    node._dynamic_state_lock = threading.Lock()
+    node._mission_update_lock = threading.Lock()
     node.composite_completion_reported = False
     node.composite_final_seq = None
     node.composite_total_count = 0
     node.composite_seq_a = None
+    node.composite_seq_u = None
     node.composite_seq_r = None
     node.composite_seq_release = None
     node.composite_seq_d = None
     node.composite_route_points = None
+    node.dynamic_indices = {}
+    node.composite_expected_waypoints = None
+    node.composite_safe_r_waypoint = None
+    node.current_waypoints = None
+    node.current_gps = None
+    node.current_raw_gps = None
+    node.current_vfr_hud = None
+    node._last_mission_current_seq = None
+    node._b_previous_signed_m = None
+    node._b_crossing_triggered = False
+    node._dynamic_update_started = False
+    node._dynamic_update_verified_monotonic = None
+    node._dynamic_update_verified_gps = None
+    node._dynamic_update_result = 'NOT_OBSERVED'
+    node._r_active_before_verify_reported = False
+    node.dynamic_r_enabled = False
+    node.dynamic_r_test_mode = False
+    node.dynamic_r_test_offset_m = 50.0
+    node.dynamic_r_update_timeout_sec = 6.0
+    node.aburcd_update_metrics_enabled = True
+    node.allow_mission_upload = True
     node.composite_ab_check_result = None
     node.composite_ab_check_state = 'WAIT_A'
     node.composite_c_confirmed = False
@@ -57,6 +82,33 @@ def make_node_without_ros():
         publish=lambda _message: None
     )
     return node
+
+
+def prepare_dynamic_update_node():
+    node = make_node_without_ros()
+    node.active_task_id = 'target_001'
+    node.mission_type = 'COMPOSITE'
+    node.get_logger = lambda: NullLogger()
+    points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
+    original = [
+        node.make_nav_waypoint(22.8800 + index * 0.001, 113.4900, 35.0, 15.0)
+        for index in range(14)
+    ]
+    mission, _ = node.build_composite_mission(points, original, 5, 9)
+    node.composite_route_points = points
+    node.composite_expected_waypoints = [
+        node.clone_waypoint(wp) for wp in mission
+    ]
+    node.current_waypoints = SimpleNamespace(
+        current_seq=node.composite_seq_u, waypoints=mission,
+    )
+    node.dynamic_r_enabled = True
+    node.dynamic_r_test_mode = True
+    events = []
+    node.publish_mission_summary_event = (
+        lambda event, **fields: events.append((event, fields))
+    )
+    return node, points, mission, events
 
 
 class NullLogger:
@@ -79,6 +131,7 @@ def test_abcdr_distances_and_order(heading_deg):
     expected_distances = {
         'A': 160.0,
         'B': 95.0,
+        'U': 75.0,
         'R': 56.0,
         'D': 160.0,
     }
@@ -96,6 +149,12 @@ def test_abcdr_distances_and_order(heading_deg):
         points['B']['lat'],
         points['B']['lon'],
     ) == pytest.approx(65.0, abs=0.05)
+    assert node.distance_m(
+        points['B']['lat'],
+        points['B']['lon'],
+        points['U']['lat'],
+        points['U']['lon'],
+    ) == pytest.approx(20.0, abs=0.05)
     assert node.distance_m(
         points['B']['lat'],
         points['B']['lon'],
@@ -377,7 +436,7 @@ def test_composite_upload_requires_auto_without_changing_mode():
     assert 'AUTO remained confirmed without an automatic mode change' in message
 
 
-def test_composite_ard_layout_keeps_b_and_c_virtual():
+def test_composite_aurd_layout_keeps_b_and_c_virtual():
     node = make_node_without_ros()
     node.release_command_enabled = True
     points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
@@ -388,24 +447,293 @@ def test_composite_ard_layout_keeps_b_and_c_virtual():
 
     mission, a_seq = node.build_composite_mission(points, original, 5, 9)
 
-    assert len(mission) == 14
+    assert len(mission) == 15
     assert a_seq == node.composite_seq_a == 5
-    assert node.composite_seq_r == 6
-    assert node.composite_seq_release == 7
-    assert node.composite_seq_d == 8
-    assert [wp.command for wp in mission[5:9]] == [
+    assert node.composite_seq_u == 6
+    assert node.composite_seq_r == 7
+    assert node.composite_seq_release == 8
+    assert node.composite_seq_d == 9
+    assert node.dynamic_indices == {
+        'A': 5, 'U': 6, 'R': 7, 'RELEASE': 8, 'D': 9, 'RESUME': 10,
+    }
+    assert [wp.command for wp in mission[5:10]] == [
+        node.MAV_CMD_NAV_WAYPOINT,
         node.MAV_CMD_NAV_WAYPOINT,
         node.MAV_CMD_NAV_WAYPOINT,
         node.MAV_CMD_DO_SET_SERVO,
         node.MAV_CMD_NAV_WAYPOINT,
     ]
     assert mission[5].x_lat == points['A']['lat']
-    assert mission[6].x_lat == points['R']['lat']
-    assert mission[8].x_lat == points['D']['lat']
-    assert mission[9].x_lat == original[9].x_lat
+    assert mission[6].x_lat == points['U']['lat']
+    assert mission[7].x_lat == points['R']['lat']
+    assert mission[9].x_lat == points['D']['lat']
+    assert mission[10].x_lat == original[9].x_lat
     assert points['B'] and points['C']
-    assert all(wp.x_lat != points['B']['lat'] for wp in mission[5:9])
-    assert all(wp.x_lat != points['C']['lat'] for wp in mission[5:9])
+    assert all(wp.x_lat != points['B']['lat'] for wp in mission[5:10])
+    assert all(wp.x_lat != points['C']['lat'] for wp in mission[5:10])
+
+
+def test_dynamic_r_requires_explicit_test_mode_and_stays_between_u_and_c():
+    node = make_node_without_ros()
+    points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
+    node.composite_route_points = points
+    snapshot = {'ground_speed_mps': 20.0, 'altitude_m': 35.0}
+
+    node.dynamic_r_enabled = True
+    candidate = node.compute_dynamic_r(snapshot, points['C'])
+    assert not candidate['valid']
+    assert candidate['reason'] == 'production_dynamic_r_formula_not_configured'
+
+    node.dynamic_r_test_mode = True
+    candidate = node.compute_dynamic_r(snapshot, points['C'])
+    assert candidate['valid']
+    assert candidate['reason'] == 'TEST_ONLY_fixed_offset'
+    assert node.validate_dynamic_r_candidate(candidate)[0]
+    assert node.distance_m(
+        candidate['lat'], candidate['lon'],
+        points['C']['lat'], points['C']['lon'],
+    ) == pytest.approx(50.0, abs=0.05)
+
+
+def test_dynamic_r_outside_u_c_interval_is_rejected():
+    node = make_node_without_ros()
+    points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
+    node.composite_route_points = points
+    bad_lat, bad_lon = node.destination_point(
+        points['C']['lat'], points['C']['lon'],
+        points['reverse_heading_deg'], 90.0,
+    )
+    ok, reason = node.validate_dynamic_r_candidate({
+        'valid': True, 'lat': bad_lat, 'lon': bad_lon, 'alt': 35.0,
+    })
+    assert not ok
+    assert 'R_DYNAMIC_OUT_OF_RANGE' in reason
+
+
+def test_virtual_b_crossing_triggers_once_only_while_u_is_current():
+    node = make_node_without_ros()
+    node.dynamic_r_enabled = True
+    node.mission_type = 'COMPOSITE'
+    points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
+    node.composite_route_points = points
+    node.dynamic_indices = {'A': 5, 'U': 6, 'R': 7, 'RELEASE': 8, 'D': 9}
+    node.composite_seq_a = 5
+    node.composite_seq_u = 6
+    node.composite_seq_r = 7
+    node.composite_seq_release = 8
+    node.composite_seq_d = 9
+    node.current_waypoints = SimpleNamespace(
+        current_seq=6, waypoints=[object()] * 12
+    )
+    node.current_vfr_hud = SimpleNamespace(
+        groundspeed=21.0, climb=-0.2, heading=90
+    )
+    node.get_logger = lambda: NullLogger()
+    events = []
+    node.publish_mission_summary_event = (
+        lambda event, **fields: events.append((event, fields))
+    )
+    snapshots = []
+    node._dynamic_r_worker = lambda snapshot: snapshots.append(snapshot)
+
+    before_lat, before_lon = node.destination_point(
+        points['B']['lat'], points['B']['lon'], 270.0, 2.0
+    )
+    after_lat, after_lon = node.destination_point(
+        points['B']['lat'], points['B']['lon'], 90.0, 2.0
+    )
+    before = SimpleNamespace(
+        latitude=before_lat, longitude=before_lon, altitude=35.0,
+        status=SimpleNamespace(status=0),
+    )
+    after = SimpleNamespace(
+        latitude=after_lat, longitude=after_lon, altitude=35.0,
+        status=SimpleNamespace(status=0),
+    )
+    node.current_gps = before
+    node._maybe_detect_virtual_b_crossing(before)
+    node.current_gps = after
+    node._maybe_detect_virtual_b_crossing(after)
+    node._maybe_detect_virtual_b_crossing(after)
+    deadline = time.monotonic() + 1.0
+    while not snapshots and time.monotonic() < deadline:
+        time.sleep(0.001)
+
+    assert [name for name, _ in events] == ['b_crossed', 'b_state_frozen']
+    assert len(snapshots) == 1
+    assert snapshots[0]['current_seq'] == 6
+    assert snapshots[0]['ground_speed_mps'] == 21.0
+
+
+def test_dynamic_r_update_uses_one_waypoint_and_pullback_verification():
+    node = make_node_without_ros()
+    node.mission_type = 'COMPOSITE'
+    node.get_logger = lambda: NullLogger()
+    points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
+    original = [
+        node.make_nav_waypoint(22.8800 + index * 0.001, 113.4900, 35.0, 15.0)
+        for index in range(14)
+    ]
+    mission, _ = node.build_composite_mission(points, original, 5, 9)
+    node.composite_route_points = points
+    node.composite_expected_waypoints = [
+        node.clone_waypoint(wp) for wp in mission
+    ]
+    node.current_waypoints = SimpleNamespace(
+        current_seq=node.composite_seq_u, waypoints=mission,
+    )
+    node.dynamic_r_enabled = True
+    node.dynamic_r_test_mode = True
+    events = []
+    node.publish_mission_summary_event = (
+        lambda event, **fields: events.append((event, fields))
+    )
+    partial_calls = []
+
+    async def partial(start_index, waypoint):
+        partial_calls.append((start_index, node.clone_waypoint(waypoint)))
+
+    async def pull():
+        updated = [node.clone_waypoint(wp) for wp in mission]
+        updated[partial_calls[0][0]] = node.clone_waypoint(partial_calls[0][1])
+        return SimpleNamespace(
+            current_seq=node.composite_seq_u,
+            waypoints=updated,
+        )
+
+    node.push_partial_mission_async = partial
+    node.pull_mission_async = pull
+    candidate = node.compute_dynamic_r({'ground_speed_mps': 20.0}, points['C'])
+    snapshot = {'timestamp_monotonic': time.monotonic(), 'current_seq': 6}
+    asyncio.run(node._update_dynamic_r_async(candidate, snapshot, 0.1))
+
+    assert len(partial_calls) == 1
+    assert partial_calls[0][0] == node.composite_seq_r
+    assert node._dynamic_update_result == 'DYNAMIC_R'
+    assert 'r_push_verified' in [name for name, _ in events]
+
+
+def test_dynamic_r_update_rejects_late_without_push():
+    node = make_node_without_ros()
+    node.get_logger = lambda: NullLogger()
+    node.dynamic_indices = {'A': 5, 'U': 6, 'R': 7, 'RELEASE': 8, 'D': 9}
+    node.composite_seq_r = 7
+    node.current_waypoints = SimpleNamespace(
+        current_seq=7, waypoints=[object()] * 12
+    )
+    node.composite_route_points = node.compute_abcdr_points(
+        22.8848, 113.4956, 90.0
+    )
+    events = []
+    node.publish_mission_summary_event = (
+        lambda event, **fields: events.append(event)
+    )
+    calls = []
+    node.push_partial_mission_async = lambda *_args: calls.append(True)
+    candidate = {
+        'valid': True, 'lat': 22.0, 'lon': 113.0, 'alt': 35.0,
+    }
+    asyncio.run(node._update_dynamic_r_async(
+        candidate, {'timestamp_monotonic': time.monotonic()}, 0.1
+    ))
+    assert calls == []
+    assert node._dynamic_update_result == 'UPDATE_TOO_LATE'
+    assert 'r_update_rejected_late' in events
+
+
+def test_dynamic_r_push_failure_keeps_safe_mission_cache():
+    node, points, mission, events = prepare_dynamic_update_node()
+
+    async def failing_push(_seq, _waypoint):
+        raise RuntimeError('injected partial push failure')
+
+    node.push_partial_mission_async = failing_push
+    snapshot = {'timestamp_monotonic': time.monotonic(), 'current_seq': 6}
+    node._dynamic_r_worker(snapshot)
+
+    assert node._dynamic_update_result == 'UPDATE_FAILED'
+    assert node.composite_expected_waypoints[node.composite_seq_r].x_lat == (
+        mission[node.composite_seq_r].x_lat
+    )
+    assert any(
+        name == 'r_push_failed' and 'injected' in fields['failure_reason']
+        for name, fields in events
+    )
+
+
+def test_dynamic_r_verify_failure_performs_one_safe_r_restore():
+    node, points, mission, events = prepare_dynamic_update_node()
+    partial_calls = []
+    pull_count = 0
+
+    async def partial(seq, waypoint):
+        partial_calls.append((seq, node.clone_waypoint(waypoint)))
+
+    async def pull():
+        nonlocal pull_count
+        pull_count += 1
+        if pull_count == 1:
+            corrupt = [node.clone_waypoint(wp) for wp in mission]
+            corrupt[node.composite_seq_d].x_lat += 0.01
+            return SimpleNamespace(
+                current_seq=node.composite_seq_u, waypoints=corrupt,
+            )
+        restored = [node.clone_waypoint(wp) for wp in mission]
+        return SimpleNamespace(
+            current_seq=node.composite_seq_u, waypoints=restored,
+        )
+
+    node.push_partial_mission_async = partial
+    node.pull_mission_async = pull
+    candidate = node.compute_dynamic_r({'ground_speed_mps': 20.0}, points['C'])
+    asyncio.run(node._update_dynamic_r_async(
+        candidate, {'timestamp_monotonic': time.monotonic()}, 0.1
+    ))
+
+    assert len(partial_calls) == 2
+    assert partial_calls[1][0] == node.composite_seq_r
+    assert partial_calls[1][1].x_lat == mission[node.composite_seq_r].x_lat
+    assert node._dynamic_update_result == 'R_SAFE_FALLBACK'
+    assert any(name == 'r_push_verify_failed' for name, _ in events)
+
+
+def test_dynamic_r_timeout_stops_before_partial_push():
+    node, points, _mission, events = prepare_dynamic_update_node()
+    node.dynamic_r_update_timeout_sec = 0.001
+    original_compute = node.compute_dynamic_r
+
+    def slow_compute(snapshot, target):
+        time.sleep(0.005)
+        return original_compute(snapshot, target)
+
+    node.compute_dynamic_r = slow_compute
+    calls = []
+    node.push_partial_mission_async = lambda *_args: calls.append(True)
+    node._dynamic_r_worker({
+        'timestamp_monotonic': time.monotonic(), 'current_seq': 6,
+    })
+
+    assert calls == []
+    assert node._dynamic_update_result == 'UPDATE_FAILED'
+    assert any(
+        name == 'r_push_failed'
+        and fields['failure_reason'] == 'dynamic_r_update_timeout_before_push'
+        for name, fields in events
+    )
+
+
+def test_dynamic_r_worker_rejects_busy_mission_transaction():
+    node, _points, _mission, events = prepare_dynamic_update_node()
+    assert node._mission_update_lock.acquire(blocking=False)
+    try:
+        node._dynamic_r_worker({
+            'timestamp_monotonic': time.monotonic(), 'current_seq': 6,
+        })
+    finally:
+        node._mission_update_lock.release()
+
+    assert node._dynamic_update_result == 'UPDATE_FAILED'
+    assert any(name == 'r_update_rejected_mission_busy' for name, _ in events)
 
 
 def test_composite_ard_start_seq_mapping_is_preserved():

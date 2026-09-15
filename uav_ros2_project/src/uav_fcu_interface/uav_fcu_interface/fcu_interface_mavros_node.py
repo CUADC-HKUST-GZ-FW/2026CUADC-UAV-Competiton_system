@@ -13,7 +13,9 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
 from sensor_msgs.msg import NavSatFix
-from mavros_msgs.msg import State, Waypoint, WaypointList, WaypointReached
+from mavros_msgs.msg import (
+    State, VfrHud, Waypoint, WaypointList, WaypointReached,
+)
 from mavros_msgs.srv import (
     WaypointClear,
     WaypointPush,
@@ -44,6 +46,7 @@ class FcuInterfaceMavrosNode(Node):
         self.current_state = None
         self.current_gps = None
         self.current_raw_gps = None
+        self.current_vfr_hud = None
         self.current_waypoints = None
 
         self.last_reached_seq = -1
@@ -54,10 +57,23 @@ class FcuInterfaceMavrosNode(Node):
         self.composite_final_seq = None
         self.composite_total_count = 0
         self.composite_seq_a = None
+        self.composite_seq_u = None
         self.composite_seq_r = None
         self.composite_seq_release = None
         self.composite_seq_d = None
         self.composite_route_points = None
+        self.dynamic_indices = {}
+        self.composite_expected_waypoints = None
+        self.composite_safe_r_waypoint = None
+        self._last_mission_current_seq = None
+        self._b_previous_signed_m = None
+        self._b_crossing_triggered = False
+        self._dynamic_update_started = False
+        self._dynamic_update_verified_monotonic = None
+        self._dynamic_update_verified_gps = None
+        self._dynamic_update_result = 'NOT_OBSERVED'
+        self._r_active_before_verify_reported = False
+        self._dynamic_state_lock = threading.Lock()
         self.composite_ab_check_result = None
         # Composite A-B trajectory checker state:
         # WAIT_A -> ALIGNING -> EVALUATING -> FINALIZED
@@ -88,6 +104,9 @@ class FcuInterfaceMavrosNode(Node):
         # Temporary AUTO mission geometry.
         self.declare_parameter('a_offset_m', 160.0)
         self.declare_parameter('b_offset_m', 95.0)
+        # TEMPORARY TEST VALUE. Final B-U and U-R spacing must be selected from
+        # measured update latency and commit-margin data.
+        self.declare_parameter('u_offset_m', 75.0)
         self.declare_parameter('release_offset_m', 56.0)
         self.declare_parameter('d_offset_m', 160.0)
 
@@ -116,6 +135,15 @@ class FcuInterfaceMavrosNode(Node):
 
         # Composite target-segment altitude.
         self.declare_parameter('mission_altitude_m', 15.0)
+
+        # Dynamic R is opt-in. There is no production release-point formula in
+        # this revision; the explicitly enabled test mode exists only for SITL
+        # validation of B-crossing -> partial push -> pull-back verification.
+        self.declare_parameter('dynamic_r_enabled', False)
+        self.declare_parameter('dynamic_r_test_mode', False)
+        self.declare_parameter('dynamic_r_test_offset_m', 50.0)
+        self.declare_parameter('dynamic_r_update_timeout_sec', 6.0)
+        self.declare_parameter('aburcd_update_metrics_enabled', True)
 
         self.dry_run_goto = bool(self.get_parameter('dry_run_goto').value)
         self.allow_mission_upload = bool(
@@ -146,6 +174,7 @@ class FcuInterfaceMavrosNode(Node):
 
         self.a_offset_m = float(self.get_parameter('a_offset_m').value)
         self.b_offset_m = float(self.get_parameter('b_offset_m').value)
+        self.u_offset_m = float(self.get_parameter('u_offset_m').value)
         self.release_offset_m = float(self.get_parameter('release_offset_m').value)
         self.d_offset_m = float(self.get_parameter('d_offset_m').value)
 
@@ -209,6 +238,30 @@ class FcuInterfaceMavrosNode(Node):
         )
 
         self.mission_altitude_m = float(self.get_parameter('mission_altitude_m').value)
+        self.dynamic_r_enabled = bool(
+            self.get_parameter('dynamic_r_enabled').value
+        )
+        self.dynamic_r_test_mode = bool(
+            self.get_parameter('dynamic_r_test_mode').value
+        )
+        self.dynamic_r_test_offset_m = float(
+            self.get_parameter('dynamic_r_test_offset_m').value
+        )
+        self.dynamic_r_update_timeout_sec = max(
+            0.1,
+            float(self.get_parameter('dynamic_r_update_timeout_sec').value),
+        )
+        self.aburcd_update_metrics_enabled = bool(
+            self.get_parameter('aburcd_update_metrics_enabled').value
+        )
+        if not (
+            self.a_offset_m > self.b_offset_m > self.u_offset_m
+            > self.release_offset_m > 0.0
+        ):
+            raise ValueError(
+                'ABURCD offsets must satisfy '
+                'a_offset_m > b_offset_m > u_offset_m > release_offset_m > 0'
+            )
         history_size = max(20, self.b_check_required_samples * 6)
         self.gps_history = deque(maxlen=history_size)
 
@@ -233,6 +286,14 @@ class FcuInterfaceMavrosNode(Node):
             self.gps_callback,
             sensor_qos,
             callback_group=self.callback_group
+        )
+
+        self.create_subscription(
+            VfrHud,
+            '/mavros/vfr_hud',
+            self.vfr_hud_callback,
+            sensor_qos,
+            callback_group=self.callback_group,
         )
 
         self.create_subscription(
@@ -329,6 +390,7 @@ class FcuInterfaceMavrosNode(Node):
             f'resume_wp_index={self.resume_wp_index} '
             f'a_offset_m={self.a_offset_m} '
             f'b_offset_m={self.b_offset_m} '
+            f'u_offset_m={self.u_offset_m} '
             f'release_offset_m={self.release_offset_m} '
             f'd_offset_m={self.d_offset_m} '
             f'a_radius={self.a_acceptance_radius_m} '
@@ -338,7 +400,14 @@ class FcuInterfaceMavrosNode(Node):
             f'mission_altitude_m={self.mission_altitude_m} '
             f'control_mode={self.control_mode} '
             f'release_command_enabled={self._bool(self.release_command_enabled)} '
-            f'release_command_reason={self._reason(self.release_command_reason)}'
+            'release_command_reason='
+            f'{self._reason(self.release_command_reason)} '
+            f'dynamic_r_enabled={self._bool(self.dynamic_r_enabled)} '
+            'dynamic_r_update_timeout_sec='
+            f'{self.dynamic_r_update_timeout_sec:.3f} '
+            f'dynamic_r_test_mode={self._bool(self.dynamic_r_test_mode)} '
+            'aburcd_update_metrics_enabled='
+            f'{self._bool(self.aburcd_update_metrics_enabled)}'
         )
 
     # -------------------------
@@ -363,6 +432,7 @@ class FcuInterfaceMavrosNode(Node):
         self.current_gps = msg
         self._record_gps_sample(msg)
         self.update_composite_trajectory_check(msg)
+        self._maybe_detect_virtual_b_crossing(msg)
 
     def raw_gps_callback(self, msg):
         self.current_raw_gps = msg
@@ -370,9 +440,61 @@ class FcuInterfaceMavrosNode(Node):
             self.current_gps = msg
             self._record_gps_sample(msg)
             self.update_composite_trajectory_check(msg)
+            self._maybe_detect_virtual_b_crossing(msg)
+
+    def vfr_hud_callback(self, msg):
+        self.current_vfr_hud = msg
 
     def waypoints_callback(self, msg):
         self.current_waypoints = msg
+        current_seq = int(msg.current_seq)
+        if current_seq == self._last_mission_current_seq:
+            return
+        self._last_mission_current_seq = current_seq
+        if self.mission_type != 'COMPOSITE':
+            return
+        item = self.composite_item_name(current_seq)
+        if item in {'A', 'U', 'R'}:
+            gps = self._gps_snapshot_fields()
+            if (
+                item == 'R'
+                and self._dynamic_update_verified_monotonic is not None
+            ):
+                gps['r_commit_margin_sec'] = max(
+                    0.0,
+                    time.monotonic() - self._dynamic_update_verified_monotonic,
+                )
+                if self._dynamic_update_verified_gps is not None:
+                    gps['r_commit_margin_m'] = self.distance_m(
+                        self._dynamic_update_verified_gps['lat'],
+                        self._dynamic_update_verified_gps['lon'],
+                        self.composite_route_points['R']['lat'],
+                        self.composite_route_points['R']['lon'],
+                    )
+            self._publish_aburcd_event(
+                f'mission_current_{item.lower()}',
+                current_seq=current_seq,
+                reached_seq=None,
+                **gps,
+            )
+        if (
+            self.composite_seq_r is not None
+            and current_seq >= self.composite_seq_r
+            and self._dynamic_update_started
+            and self._dynamic_update_verified_monotonic is None
+            and not self._r_active_before_verify_reported
+        ):
+            self._r_active_before_verify_reported = True
+            self._dynamic_update_result = 'UPDATE_TOO_LATE'
+            self._publish_aburcd_event(
+                'error_r_active_before_update_verified',
+                current_seq=current_seq,
+                reached_seq=None,
+                failure_reason=(
+                    'R became current before pull-back verification'
+                ),
+                **self._gps_snapshot_fields(),
+            )
 
     def waypoint_reached_callback(self, msg):
         self.last_reached_seq = int(msg.wp_seq)
@@ -383,7 +505,180 @@ class FcuInterfaceMavrosNode(Node):
             f'item={self.mission_item_name(self.last_reached_seq)}'
         )
         self.update_composite_trajectory_from_reached(self.last_reached_seq)
+        self._record_aburcd_reached(self.last_reached_seq)
         self.maybe_report_composite_mission_complete()
+
+    def _current_mission_seq(self):
+        if self.current_waypoints is None:
+            return None
+        return int(self.current_waypoints.current_seq)
+
+    def _gps_snapshot_fields(self, gps=None):
+        gps = gps or self.get_best_gps()
+        fields = {
+            'lat': None,
+            'lon': None,
+            'altitude_m': None,
+            'ground_speed_mps': None,
+            'vertical_speed_mps': None,
+            'heading_deg': None,
+            'distance_to_u_m': None,
+            'distance_to_r_m': None,
+        }
+        if gps is not None:
+            fields.update({
+                'lat': float(gps.latitude),
+                'lon': float(gps.longitude),
+                'altitude_m': float(gps.altitude),
+            })
+            if self.composite_route_points is not None:
+                fields['distance_to_u_m'] = self.distance_m(
+                    gps.latitude,
+                    gps.longitude,
+                    self.composite_route_points['U']['lat'],
+                    self.composite_route_points['U']['lon'],
+                )
+                fields['distance_to_r_m'] = self.distance_m(
+                    gps.latitude,
+                    gps.longitude,
+                    self.composite_route_points['R']['lat'],
+                    self.composite_route_points['R']['lon'],
+                )
+        if self.current_vfr_hud is not None:
+            fields.update({
+                'ground_speed_mps': float(self.current_vfr_hud.groundspeed),
+                'vertical_speed_mps': float(self.current_vfr_hud.climb),
+                'heading_deg': float(self.current_vfr_hud.heading),
+            })
+        return fields
+
+    def _publish_aburcd_event(self, event, **fields):
+        fields.setdefault('current_seq', self._current_mission_seq())
+        fields.setdefault('reached_seq', None)
+        fields.setdefault('a_seq', self.dynamic_indices.get('A'))
+        fields.setdefault('u_seq', self.dynamic_indices.get('U'))
+        fields.setdefault('r_seq', self.dynamic_indices.get('R'))
+        fields.setdefault('release_seq', self.dynamic_indices.get('RELEASE'))
+        fields.setdefault('d_seq', self.dynamic_indices.get('D'))
+        self.publish_mission_summary_event(event, **fields)
+        rendered = ' '.join(
+            f'{key}={self._reason(value)}'
+            for key, value in fields.items()
+            if value is not None
+        )
+        self.get_logger().info(
+            f'[ABURCD] {event.upper()} {rendered}'.rstrip()
+        )
+
+    def _record_aburcd_reached(self, reached_seq):
+        if self.mission_type != 'COMPOSITE':
+            return
+        item = self.composite_item_name(reached_seq)
+        if item not in {'A', 'U', 'R'}:
+            return
+        fields = self._gps_snapshot_fields()
+        self._publish_aburcd_event(
+            f'{item.lower()}_reached',
+            current_seq=self._current_mission_seq(),
+            reached_seq=int(reached_seq),
+            **fields,
+        )
+
+    def _virtual_b_signed_distance_m(self, gps):
+        points = self.composite_route_points
+        if points is None:
+            return None
+        bx, by = self.local_xy_m(
+            points['A']['lat'], points['A']['lon'],
+            points['B']['lat'], points['B']['lon'],
+        )
+        px, py = self.local_xy_m(
+            points['A']['lat'], points['A']['lon'],
+            gps.latitude, gps.longitude,
+        )
+        b_along = math.hypot(bx, by)
+        if b_along < 1.0:
+            return None
+        return (px * bx + py * by) / b_along - b_along
+
+    def _maybe_detect_virtual_b_crossing(self, gps):
+        # Raw and fused GPS callbacks share this detector under a reentrant
+        # callback group. Serialize the one-shot transition before spawning the
+        # worker so both streams cannot start competing updates.
+        with self._dynamic_state_lock:
+            self._maybe_detect_virtual_b_crossing_locked(gps)
+
+    def _maybe_detect_virtual_b_crossing_locked(self, gps):
+        if (
+            not self.dynamic_r_enabled
+            or self.mission_type != 'COMPOSITE'
+            or self.composite_route_points is None
+            or self._b_crossing_triggered
+        ):
+            return
+        signed_m = self._virtual_b_signed_distance_m(gps)
+        if signed_m is None:
+            return
+        previous = self._b_previous_signed_m
+        if previous is None:
+            self._b_previous_signed_m = signed_m
+            return
+        if not (previous < 0.0 <= signed_m):
+            self._b_previous_signed_m = signed_m
+            return
+
+        current_seq = self._current_mission_seq()
+        r_seq = self.dynamic_indices.get('R')
+        u_seq = self.dynamic_indices.get('U')
+        if current_seq is None or r_seq is None or current_seq >= r_seq:
+            self._b_crossing_triggered = True
+            self._dynamic_update_result = 'UPDATE_TOO_LATE'
+            self._publish_aburcd_event(
+                'r_update_rejected_late',
+                current_seq=current_seq,
+                reached_seq=None,
+                failure_reason='virtual B crossed after R became current',
+                **self._gps_snapshot_fields(gps),
+            )
+            return
+        if current_seq != u_seq:
+            # Retain the negative-side sample so a slightly delayed
+            # MISSION_CURRENT update can authorize crossing on the next GPS.
+            return
+
+        detected = time.monotonic()
+        snapshot = {
+            'timestamp_unix_sec': time.time(),
+            'timestamp_monotonic': detected,
+            'current_seq': current_seq,
+            **self._gps_snapshot_fields(gps),
+        }
+        snapshot['snapshot_latency_ms'] = (
+            time.monotonic() - detected
+        ) * 1000.0
+        self._b_crossing_triggered = True
+        self._dynamic_update_started = True
+        self._publish_aburcd_event(
+            'b_crossed',
+            current_seq=current_seq,
+            reached_seq=None,
+            b_signed_distance_m=signed_m,
+            **self._gps_snapshot_fields(gps),
+        )
+        self._publish_aburcd_event(
+            'b_state_frozen',
+            current_seq=current_seq,
+            reached_seq=None,
+            snapshot_latency_ms=snapshot['snapshot_latency_ms'],
+            **self._gps_snapshot_fields(gps),
+        )
+        worker = threading.Thread(
+            target=self._dynamic_r_worker,
+            args=(snapshot,),
+            name='dynamic-r-update',
+            daemon=True,
+        )
+        worker.start()
 
     def clear_residual_route_checks(self, clear_route=True):
         """Reset per-task trajectory state without changing the active mission."""
@@ -598,6 +893,11 @@ class FcuInterfaceMavrosNode(Node):
 
         if reached_seq == self.composite_seq_a:
             self.reset_b_check_window()
+            self._b_previous_signed_m = (
+                self._virtual_b_signed_distance_m(self.get_best_gps())
+                if self.get_best_gps() is not None
+                else None
+            )
             self.composite_ab_check_result = None
             self.composite_ab_check_state = 'ALIGNING'
             self._last_b_check_pending_log_time = 0.0
@@ -1175,7 +1475,7 @@ class FcuInterfaceMavrosNode(Node):
         return True, 'approach_valid', metrics
 
     def compute_abcdr_points(self, target_lat, target_lon, heading_deg):
-        """以目标C为基准计算A、B、提前释放点R和离场点D。"""
+        """Compute ABURCD geometry while B and C remain virtual points."""
         heading_deg = self.normalize_heading_deg(heading_deg)
         reverse_heading_deg = self.normalize_heading_deg(heading_deg + 180.0)
 
@@ -1191,6 +1491,13 @@ class FcuInterfaceMavrosNode(Node):
             target_lon,
             reverse_heading_deg,
             self.b_offset_m
+        )
+
+        u_lat, u_lon = self.destination_point(
+            target_lat,
+            target_lon,
+            reverse_heading_deg,
+            self.u_offset_m,
         )
 
         r_lat, r_lon = self.destination_point(
@@ -1213,12 +1520,346 @@ class FcuInterfaceMavrosNode(Node):
         return {
             'A': {'lat': a_lat, 'lon': a_lon},
             'B': {'lat': b_lat, 'lon': b_lon},
+            'U': {'lat': u_lat, 'lon': u_lon},
             'R': {'lat': r_lat, 'lon': r_lon},
             'C': {'lat': c_lat, 'lon': c_lon},
             'D': {'lat': d_lat, 'lon': d_lon},
             'heading_deg': heading_deg,
             'reverse_heading_deg': reverse_heading_deg
         }
+
+    def compute_dynamic_r(self, b_snapshot, target_c):
+        """Return a dynamic-R candidate, separate from callback policy."""
+        # The production release-point physics are intentionally not invented.
+        # Only explicit TEST ONLY mode can generate a changed candidate; normal
+        # real-flight defaults retain R_safe.
+        if not self.dynamic_r_enabled:
+            return {
+                'valid': False,
+                'lat': None,
+                'lon': None,
+                'alt': None,
+                'reason': 'dynamic_r_disabled',
+            }
+        if not self.dynamic_r_test_mode:
+            return {
+                'valid': False,
+                'lat': None,
+                'lon': None,
+                'alt': None,
+                'reason': 'production_dynamic_r_formula_not_configured',
+            }
+        if not b_snapshot or target_c is None:
+            return {
+                'valid': False,
+                'lat': None,
+                'lon': None,
+                'alt': None,
+                'reason': 'dynamic_r_input_missing',
+            }
+        lat, lon = self.destination_point(
+            float(target_c['lat']),
+            float(target_c['lon']),
+            self.composite_route_points['reverse_heading_deg'],
+            self.dynamic_r_test_offset_m,
+        )
+        return {
+            'valid': True,
+            'lat': lat,
+            'lon': lon,
+            'alt': self.mission_altitude_m,
+            'reason': 'TEST_ONLY_fixed_offset',
+        }
+
+    def validate_dynamic_r_candidate(self, candidate):
+        if not candidate.get('valid'):
+            return False, str(candidate.get('reason', 'dynamic_r_invalid'))
+        values = [
+            candidate.get('lat'), candidate.get('lon'), candidate.get('alt')
+        ]
+        if not all(
+            value is not None and math.isfinite(float(value))
+            for value in values
+        ):
+            return False, 'dynamic_r_non_finite'
+        points = self.composite_route_points
+        ux, uy = self.local_xy_m(
+            points['U']['lat'], points['U']['lon'],
+            points['C']['lat'], points['C']['lon'],
+        )
+        rx, ry = self.local_xy_m(
+            points['U']['lat'], points['U']['lon'],
+            float(candidate['lat']), float(candidate['lon']),
+        )
+        length = math.hypot(ux, uy)
+        if length < 1.0:
+            return False, 'u_c_segment_too_short'
+        along = (rx * ux + ry * uy) / length
+        cross = abs(rx * uy - ry * ux) / length
+        if not (0.0 < along < length) or cross > 1.0:
+            return False, (
+                'R_DYNAMIC_OUT_OF_RANGE:'
+                f'along_u_to_c_m={along:.3f}:u_c_length_m={length:.3f}:'
+                f'cross_track_m={cross:.3f}'
+            )
+        return True, 'dynamic_r_between_u_and_c'
+
+    def _dynamic_update_timed_out(self, started_monotonic):
+        return (
+            time.monotonic() - started_monotonic
+            > self.dynamic_r_update_timeout_sec
+        )
+
+    def _dynamic_r_worker(self, snapshot):
+        started = float(snapshot['timestamp_monotonic'])
+        self._publish_aburcd_event(
+            'r_calc_start',
+            current_seq=self._current_mission_seq(),
+            reached_seq=None,
+            **self._gps_snapshot_fields(),
+        )
+        calc_started = time.monotonic()
+        try:
+            candidate = self.compute_dynamic_r(
+                snapshot,
+                self.composite_route_points['C'],
+            )
+        except Exception as error:  # noqa: BLE001 - future algorithm boundary.
+            candidate = {'valid': False, 'reason': f'exception:{error}'}
+        calc_duration_ms = (time.monotonic() - calc_started) * 1000.0
+        valid, reason = self.validate_dynamic_r_candidate(candidate)
+        if not valid:
+            self._dynamic_update_result = 'R_SAFE_FALLBACK'
+            failure_event = (
+                'r_dynamic_out_of_range'
+                if str(reason).startswith('R_DYNAMIC_OUT_OF_RANGE')
+                else 'r_calc_failed'
+            )
+            self._publish_aburcd_event(
+                failure_event,
+                current_seq=self._current_mission_seq(),
+                reached_seq=None,
+                calc_duration_ms=calc_duration_ms,
+                failure_reason=reason,
+                fallback='R_safe retained',
+                **self._gps_snapshot_fields(),
+            )
+            return
+        self._publish_aburcd_event(
+            'r_calc_done',
+            current_seq=self._current_mission_seq(),
+            reached_seq=None,
+            calc_duration_ms=calc_duration_ms,
+            dynamic_r_lat=float(candidate['lat']),
+            dynamic_r_lon=float(candidate['lon']),
+            dynamic_r_alt=float(candidate['alt']),
+            calculation_reason=candidate['reason'],
+            **self._gps_snapshot_fields(),
+        )
+        if self._dynamic_update_timed_out(started):
+            self._dynamic_update_result = 'UPDATE_FAILED'
+            self._publish_aburcd_event(
+                'r_push_failed',
+                failure_reason='dynamic_r_update_timeout_before_push',
+                calc_duration_ms=calc_duration_ms,
+                **self._gps_snapshot_fields(),
+            )
+            return
+        if not self._mission_update_lock.acquire(blocking=False):
+            self._dynamic_update_result = 'UPDATE_FAILED'
+            self._publish_aburcd_event(
+                'r_update_rejected_mission_busy',
+                failure_reason='mission update transaction already active',
+                **self._gps_snapshot_fields(),
+            )
+            return
+        try:
+            asyncio.run(
+                self._update_dynamic_r_async(
+                    candidate, snapshot, calc_duration_ms
+                )
+            )
+        except Exception as error:  # noqa: BLE001 - retain safe mission.
+            restored, restore_reason = asyncio.run(
+                self._restore_safe_r_once_async(int(self.dynamic_indices['R']))
+            )
+            self._dynamic_update_result = (
+                'R_SAFE_FALLBACK' if restored else 'UPDATE_FAILED'
+            )
+            self._publish_aburcd_event(
+                'r_push_failed',
+                failure_reason=str(error),
+                fallback=(
+                    'R_safe restored'
+                    if restored
+                    else f'R_safe unconfirmed:{restore_reason}'
+                ),
+                **self._gps_snapshot_fields(),
+            )
+        finally:
+            self._mission_update_lock.release()
+
+    async def _update_dynamic_r_async(
+        self, candidate, snapshot, calc_duration_ms
+    ):
+        started = float(snapshot['timestamp_monotonic'])
+        r_seq = int(self.dynamic_indices['R'])
+        current_seq = self._current_mission_seq()
+        if current_seq is None or current_seq >= r_seq:
+            self._dynamic_update_result = 'UPDATE_TOO_LATE'
+            self._publish_aburcd_event(
+                'r_update_rejected_late',
+                current_seq=current_seq,
+                reached_seq=None,
+                failure_reason='R is no longer a future mission item',
+                **self._gps_snapshot_fields(),
+            )
+            return
+        if current_seq != self.dynamic_indices['U']:
+            self._dynamic_update_result = 'UPDATE_FAILED'
+            self._publish_aburcd_event(
+                'r_push_failed',
+                current_seq=current_seq,
+                failure_reason='current navigation item is not U',
+                **self._gps_snapshot_fields(),
+            )
+            return
+        if self.composite_expected_waypoints is None:
+            raise RuntimeError('composite expected mission cache unavailable')
+
+        dynamic_r = self.make_nav_waypoint(
+            candidate['lat'], candidate['lon'], candidate['alt'],
+            self.c_acceptance_radius_m,
+        )
+        expected = [
+            self.clone_waypoint(wp)
+            for wp in self.composite_expected_waypoints
+        ]
+        expected[r_seq] = self.clone_waypoint(dynamic_r)
+        self._publish_aburcd_event(
+            'r_push_start',
+            current_seq=current_seq,
+            reached_seq=None,
+            r_seq=r_seq,
+            **self._gps_snapshot_fields(),
+        )
+        push_started = time.monotonic()
+        await self.push_partial_mission_async(r_seq, dynamic_r)
+        push_duration_ms = (time.monotonic() - push_started) * 1000.0
+        self._publish_aburcd_event(
+            'r_push_ack',
+            current_seq=self._current_mission_seq(),
+            reached_seq=None,
+            r_seq=r_seq,
+            push_duration_ms=push_duration_ms,
+            **self._gps_snapshot_fields(),
+        )
+        if (
+            self._current_mission_seq() is None
+            or self._current_mission_seq() >= r_seq
+        ):
+            self._dynamic_update_result = 'UPDATE_TOO_LATE'
+            self._publish_aburcd_event(
+                'error_r_active_before_update_verified',
+                failure_reason='R became current after partial-push ACK',
+                push_duration_ms=push_duration_ms,
+                **self._gps_snapshot_fields(),
+            )
+            return
+        verify_started = time.monotonic()
+        pulled = await self.pull_mission_async()
+        verify_duration_ms = (time.monotonic() - verify_started) * 1000.0
+        ok, verify_reason = self.verify_temporary_mission(
+            expected, list(pulled.waypoints)
+        )
+        current_seq = int(pulled.current_seq)
+        if current_seq >= r_seq:
+            self._dynamic_update_result = 'UPDATE_TOO_LATE'
+            self._publish_aburcd_event(
+                'error_r_active_before_update_verified',
+                current_seq=current_seq,
+                failure_reason=(
+                    'R became current before pull-back verification completed'
+                ),
+                verify_duration_ms=verify_duration_ms,
+                **self._gps_snapshot_fields(),
+            )
+            return
+        if self._dynamic_update_timed_out(started):
+            ok = False
+            verify_reason = 'dynamic_r_update_timeout'
+        if not ok:
+            restored, restore_reason = await self._restore_safe_r_once_async(
+                r_seq
+            )
+            self._dynamic_update_result = (
+                'R_SAFE_FALLBACK' if restored else 'UPDATE_FAILED'
+            )
+            self._publish_aburcd_event(
+                'r_push_verify_failed',
+                current_seq=current_seq,
+                failure_reason=verify_reason,
+                fallback=(
+                    'R_safe restored'
+                    if restored
+                    else f'R_safe unconfirmed:{restore_reason}'
+                ),
+                verify_duration_ms=verify_duration_ms,
+                **self._gps_snapshot_fields(),
+            )
+            return
+
+        verified_at = time.monotonic()
+        self.composite_expected_waypoints = expected
+        self.composite_route_points['R'] = {
+            'lat': float(candidate['lat']),
+            'lon': float(candidate['lon']),
+        }
+        self._dynamic_update_verified_monotonic = verified_at
+        gps = self.get_best_gps()
+        self._dynamic_update_verified_gps = (
+            {'lat': float(gps.latitude), 'lon': float(gps.longitude)}
+            if gps is not None else None
+        )
+        self._dynamic_update_result = 'DYNAMIC_R'
+        total_ms = (verified_at - started) * 1000.0
+        self._publish_aburcd_event(
+            'r_push_verified',
+            current_seq=current_seq,
+            reached_seq=None,
+            calc_duration_ms=calc_duration_ms,
+            push_duration_ms=push_duration_ms,
+            verify_duration_ms=verify_duration_ms,
+            dynamic_update_total_ms=total_ms,
+            dynamic_r_lat=float(candidate['lat']),
+            dynamic_r_lon=float(candidate['lon']),
+            verification_reason=verify_reason,
+            **self._gps_snapshot_fields(),
+        )
+
+    async def _restore_safe_r_once_async(self, r_seq):
+        current_seq = self._current_mission_seq()
+        if current_seq is None or current_seq >= r_seq:
+            return False, 'restore_rejected_late'
+        if self.composite_safe_r_waypoint is None:
+            return False, 'safe_r_cache_missing'
+        if self.composite_expected_waypoints is None:
+            return False, 'expected_mission_cache_missing'
+        try:
+            await self.push_partial_mission_async(
+                r_seq, self.composite_safe_r_waypoint
+            )
+            pulled = await self.pull_mission_async()
+            expected = [
+                self.clone_waypoint(wp)
+                for wp in self.composite_expected_waypoints
+            ]
+            ok, reason = self.verify_temporary_mission(
+                expected, list(pulled.waypoints)
+            )
+            return ok, reason
+        except Exception as error:  # noqa: BLE001 - one rollback attempt only.
+            return False, str(error)
 
     def can_insert_release_command(self):
         """验证控制模式、独立开关及载荷参数。"""
@@ -1289,7 +1930,7 @@ class FcuInterfaceMavrosNode(Node):
         break_index,
         resume_index,
     ):
-        """Build original prefix + A/R/[release]/D + configured original suffix."""
+        """Build prefix + A/U/R-safe/[release]/D + configured suffix."""
         if not original_waypoints:
             raise ValueError('Original mission is empty; cannot splice target route.')
         if break_index <= self.HOME_SEQ:
@@ -1311,13 +1952,22 @@ class FcuInterfaceMavrosNode(Node):
             )
 
         self.composite_seq_a = int(break_index)
-        self.composite_seq_r = self.composite_seq_a + 1
+        self.composite_seq_u = self.composite_seq_a + 1
+        self.composite_seq_r = self.composite_seq_u + 1
         if self.release_command_enabled:
             self.composite_seq_release = self.composite_seq_r + 1
             self.composite_seq_d = self.composite_seq_release + 1
         else:
             self.composite_seq_release = None
             self.composite_seq_d = self.composite_seq_r + 1
+        self.dynamic_indices = {
+            'A': self.composite_seq_a,
+            'U': self.composite_seq_u,
+            'R': self.composite_seq_r,
+            'RELEASE': self.composite_seq_release,
+            'D': self.composite_seq_d,
+            'RESUME': self.composite_seq_d + 1,
+        }
 
         altitude_m = self.mission_altitude_m
         prefix = [
@@ -1339,6 +1989,12 @@ class FcuInterfaceMavrosNode(Node):
                 self.a_acceptance_radius_m,
             ),
             self.make_nav_waypoint(
+                abcdr['U']['lat'],
+                abcdr['U']['lon'],
+                altitude_m,
+                self.b_acceptance_radius_m,
+            ),
+            self.make_nav_waypoint(
                 abcdr['R']['lat'],
                 abcdr['R']['lon'],
                 altitude_m,
@@ -1358,6 +2014,9 @@ class FcuInterfaceMavrosNode(Node):
 
         composite = prefix + attack_segment + suffix
         composite[self.composite_seq_a].is_current = True
+        self.composite_safe_r_waypoint = self.clone_waypoint(
+            composite[self.composite_seq_r]
+        )
         return composite, self.composite_seq_a
 
     @staticmethod
@@ -1416,6 +2075,8 @@ class FcuInterfaceMavrosNode(Node):
             return f'ORIGINAL_PREFIX_{seq}'
         if seq == self.composite_seq_a:
             return 'A'
+        if seq == self.composite_seq_u:
+            return 'U'
         if seq == self.composite_seq_r:
             return 'R'
         if seq == self.composite_seq_release:
@@ -1495,7 +2156,9 @@ class FcuInterfaceMavrosNode(Node):
 
     async def push_mission_async(self, waypoints):
         if not self.allow_mission_upload:
-            raise RuntimeError('Mission upload is disabled by allow_mission_upload.')
+            raise RuntimeError(
+                'Mission upload is disabled by allow_mission_upload.'
+            )
 
         async def operation():
             req = WaypointPush.Request()
@@ -1519,6 +2182,44 @@ class FcuInterfaceMavrosNode(Node):
             return result
 
         return await self._retry_mission_service('WaypointPush', operation)
+
+    async def push_partial_mission_async(self, start_index, waypoint):
+        """Update exactly one future mission item through WaypointPush."""
+        if not self.allow_mission_upload:
+            raise RuntimeError(
+                'Mission upload is disabled by allow_mission_upload.'
+            )
+        start_index = int(start_index)
+        if start_index <= self.HOME_SEQ:
+            raise ValueError(
+                f'Invalid partial mission start_index={start_index}.'
+            )
+
+        async def operation():
+            request = WaypointPush.Request()
+            request.start_index = start_index
+            request.waypoints = [self.clone_waypoint(waypoint)]
+            result = await self.call_service_async(
+                self.mission_push_client,
+                request,
+                self.service_timeout_sec,
+                'WaypointPushPartialR',
+            )
+            if not result.success:
+                raise RuntimeError(
+                    'WaypointPush partial R rejected. '
+                    f'transferred={result.wp_transfered}'
+                )
+            if int(result.wp_transfered) != 1:
+                raise RuntimeError(
+                    'WaypointPush partial R incomplete. '
+                    f'transferred={result.wp_transfered}, expected=1'
+                )
+            return result
+
+        return await self._retry_mission_service(
+            'WaypointPushPartialR', operation
+        )
 
     async def pull_mission_async(self):
         req = WaypointPull.Request()
@@ -1598,11 +2299,12 @@ class FcuInterfaceMavrosNode(Node):
         radii = {
             'A': self.a_acceptance_radius_m,
             'B': self.b_acceptance_radius_m,
+            'U': self.b_acceptance_radius_m,
             'R': self.c_acceptance_radius_m,
             'C': self.c_acceptance_radius_m,
             'D': self.d_acceptance_radius_m,
         }
-        for item in ('A', 'B', 'R', 'C', 'D'):
+        for item in ('A', 'B', 'U', 'R', 'C', 'D'):
             self.get_logger().info(
                 self._prefix('PLAN')
                 + f' point computed item={item} lat={abcdr[item]["lat"]:.7f} '
@@ -1617,9 +2319,9 @@ class FcuInterfaceMavrosNode(Node):
                 f'channel={self.servo_channel} pwm={self.release_pwm} '
                 'position=between_R_and_D'
             )
-            order = 'original_prefix,A,R,DO_SET_SERVO,D,original_suffix'
+            order = 'original_prefix,A,U,R,DO_SET_SERVO,D,original_suffix'
         else:
-            order = 'original_prefix,A,R,D,original_suffix'
+            order = 'original_prefix,A,U,R,D,original_suffix'
         self.get_logger().info(
             self._prefix('PLAN')
             + f' composite mission insert_layout={order} '
@@ -1860,7 +2562,7 @@ class FcuInterfaceMavrosNode(Node):
             raise RuntimeError(f'Failed to build composite mission: {error}') from error
 
         net_count_delta = len(composite_waypoints) - original_count
-        attack_segment_item_count = 4 if self.release_command_enabled else 3
+        attack_segment_item_count = 5 if self.release_command_enabled else 4
         release_seq_text = (
             str(self.composite_seq_release)
             if self.release_command_enabled
@@ -1871,7 +2573,8 @@ class FcuInterfaceMavrosNode(Node):
             + f' composite mission generated original_count={original_count} '
             f'insert_wp_index={break_index} resume_wp_index={resume_index} '
             f'total_count={len(composite_waypoints)} a_seq={a_seq} '
-            f'b_virtual=true r_seq={self.composite_seq_r} '
+            f'b_virtual=true u_seq={self.composite_seq_u} '
+            f'r_seq={self.composite_seq_r} '
             f'release_seq={release_seq_text} c_virtual=true '
             f'd_seq={self.composite_seq_d} '
             f'attack_segment_item_count={attack_segment_item_count} '
@@ -1905,12 +2608,23 @@ class FcuInterfaceMavrosNode(Node):
                 'mission_type=COMPOSITE'
             )
         self.clear_residual_route_checks(clear_route=True)
+        self._last_mission_current_seq = None
+        self._b_previous_signed_m = None
+        self._b_crossing_triggered = False
+        self._dynamic_update_started = False
+        self._dynamic_update_verified_monotonic = None
+        self._dynamic_update_verified_gps = None
+        self._dynamic_update_result = 'NOT_OBSERVED'
+        self._r_active_before_verify_reported = False
         self.composite_route_points = {
             key: dict(value)
             for key, value in abcdr.items()
             if isinstance(value, dict)
         }
         self.composite_route_points['heading_deg'] = float(abcdr['heading_deg'])
+        self.composite_route_points['reverse_heading_deg'] = float(
+            abcdr['reverse_heading_deg']
+        )
 
         self.log_state = 'COMPOSITE_UPLOADING'
         if self.clear_mission_before_full_push:
@@ -1955,6 +2669,9 @@ class FcuInterfaceMavrosNode(Node):
         self.composite_completion_reported = False
         self.composite_total_count = len(composite_waypoints)
         self.composite_final_seq = self.composite_seq_d
+        self.composite_expected_waypoints = [
+            self.clone_waypoint(wp) for wp in composite_waypoints
+        ]
         self.mission_type = 'COMPOSITE'
         self.publish_mission_summary_event(
             'composite_mission_uploaded',
@@ -1971,22 +2688,32 @@ class FcuInterfaceMavrosNode(Node):
             start_reason=start_reason,
             a_seq=a_seq,
             b_virtual=True,
+            u_seq=self.composite_seq_u,
             r_seq=self.composite_seq_r,
             release_seq=self.composite_seq_release,
             release_command_enabled=self.release_command_enabled,
             c_virtual=True,
             d_seq=self.composite_seq_d,
+            dynamic_indices=dict(self.dynamic_indices),
             target_lat=abcdr['C']['lat'],
             target_lon=abcdr['C']['lon'],
             heading_deg=abcdr['heading_deg'],
             points={
                 key: dict(abcdr[key])
-                for key in ('A', 'B', 'R', 'C', 'D')
+                for key in ('A', 'B', 'U', 'R', 'C', 'D')
             },
         )
         self.get_logger().info(
             self._prefix('FCU')
             + f' composite mission pull-back verified count={len(composite_waypoints)}'
+        )
+        self.get_logger().info(
+            '[DYNAMIC_MISSION] '
+            + ' '.join(
+                f'{name}={seq}'
+                for name, seq in self.dynamic_indices.items()
+            )
+            + ' B=virtual C=virtual'
         )
         self.get_logger().info(
             self._prefix('FULLCHAIN', 'VERIFIED')
@@ -2052,7 +2779,8 @@ class FcuInterfaceMavrosNode(Node):
             f'Composite mission uploaded; AUTO remained confirmed without '
             f'an automatic mode change. '
             f'insert_wp_index={break_index}, resume_wp_index={resume_index}, '
-            f'a_seq={a_seq}, start_seq={start_seq}, '
+            f'a_seq={a_seq}, u_seq={self.composite_seq_u}, '
+            f'r_seq={self.composite_seq_r}, start_seq={start_seq}, '
             f'original_count={original_count}, total_count={len(composite_waypoints)}'
         )
 

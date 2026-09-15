@@ -39,9 +39,11 @@ COMMON_FCU_ARGUMENT_DEFAULTS = {
     'insert_wp_index': '5',
     'resume_wp_index': '10',
 
-    # A / B / R / C / D geometry.
+    # A / B(virtual) / U / R / C(virtual) / D geometry.
     'a_offset_m': '160.0',
     'b_offset_m': '95.0',
+    # TEMPORARY TEST VALUE. Tune only after collecting update latency/margin.
+    'u_offset_m': '75.0',
     'release_offset_m': '56.0',
     'd_offset_m': '50.0',
 
@@ -59,6 +61,14 @@ COMMON_FCU_ARGUMENT_DEFAULTS = {
 
     # Composite target-segment altitude.
     'mission_altitude_m': '15.0',
+
+    # Dynamic R is disabled by default for real flight. The test-only formula
+    # must be explicitly enabled together with dynamic_r_enabled in SITL.
+    'dynamic_r_enabled': 'false',
+    'dynamic_r_test_mode': 'false',
+    'dynamic_r_test_offset_m': '50.0',
+    'dynamic_r_update_timeout_sec': '6.0',
+    'aburcd_update_metrics_enabled': 'true',
 }
 
 

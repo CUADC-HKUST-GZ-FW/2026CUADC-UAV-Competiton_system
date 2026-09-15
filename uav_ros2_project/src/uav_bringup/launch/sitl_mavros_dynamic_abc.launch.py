@@ -243,7 +243,12 @@ def generate_launch_description():
         executable='flight_summary_logger_node',
         name='flight_summary_logger_node',
         output='both',
-        parameters=[{'use_sim_time': use_sim_time}],
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'aburcd_update_metrics_enabled': common[
+                'aburcd_update_metrics_enabled'
+            ],
+        }],
     )
 
     arguments = (

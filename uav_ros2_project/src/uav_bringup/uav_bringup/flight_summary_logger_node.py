@@ -37,6 +37,7 @@ class FlightSummaryLoggerNode(Node):
         self.declare_parameter('enabled', True)
         self.declare_parameter('c_distance_log_period_s', 2.0)
         self.declare_parameter('c_distance_improvement_step_m', 1.0)
+        self.declare_parameter('aburcd_update_metrics_enabled', True)
 
         self.enabled = bool(self.get_parameter('enabled').value)
         self.summary_path = self._resolve_summary_path(
@@ -49,6 +50,9 @@ class FlightSummaryLoggerNode(Node):
         self.c_distance_improvement_step_m = max(
             0.0,
             float(self.get_parameter('c_distance_improvement_step_m').value),
+        )
+        self.aburcd_update_metrics_enabled = bool(
+            self.get_parameter('aburcd_update_metrics_enabled').value
         )
 
         self._lock = threading.Lock()
@@ -75,6 +79,7 @@ class FlightSummaryLoggerNode(Node):
         self._last_logged_c_distance_m = None
         self._mission_signature = None
         self.a_seq = None
+        self.u_seq = None
         self.release_seq = None
         self.r_seq = None
         self.d_seq = None
@@ -82,8 +87,13 @@ class FlightSummaryLoggerNode(Node):
         self._payload_flags = {}
         self._last_health_status_log_time = 0.0
         self._last_health_status_signature = None
+        self._aburcd_metrics = {}
 
         os.makedirs(os.path.dirname(self.summary_path), exist_ok=True)
+        self.aburcd_metrics_path = os.path.join(
+            os.path.dirname(self.summary_path),
+            'aburcd_update_metrics.jsonl',
+        )
 
         sensor_qos = QoSProfile(depth=10)
         sensor_qos.reliability = ReliabilityPolicy.BEST_EFFORT
@@ -237,6 +247,41 @@ class FlightSummaryLoggerNode(Node):
             ) as stream:
                 stream.write(text)
                 stream.write('\n')
+            if (
+                self.aburcd_update_metrics_enabled
+                and event in self._ABURCD_EVENTS
+            ):
+                metric_record = {
+                    key: record.get(key)
+                    for key in self._ABURCD_METRIC_FIELDS
+                }
+                with open(
+                    self.aburcd_metrics_path,
+                    'a',
+                    encoding='utf-8',
+                ) as stream:
+                    stream.write(json.dumps(metric_record, ensure_ascii=False))
+                    stream.write('\n')
+
+    _ABURCD_EVENTS = {
+        'mission_current_a', 'a_reached', 'b_crossed', 'b_state_frozen',
+        'r_calc_start', 'r_calc_done', 'r_calc_failed', 'r_push_start',
+        'r_push_ack', 'r_push_failed', 'r_push_verified',
+        'r_push_verify_failed', 'r_dynamic_out_of_range',
+        'mission_current_u', 'u_reached',
+        'mission_current_r', 'r_reached', 'r_update_rejected_late',
+        'r_update_rejected_mission_busy',
+        'error_r_active_before_update_verified',
+    }
+    _ABURCD_METRIC_FIELDS = (
+        'time', 'event', 'task_id', 'current_seq', 'reached_seq',
+        'ground_speed_mps', 'vertical_speed_mps', 'heading_deg',
+        'lat', 'lon', 'altitude_m', 'a_seq', 'u_seq', 'r_seq',
+        'release_seq', 'd_seq', 'distance_to_u_m', 'distance_to_r_m',
+        'snapshot_latency_ms', 'calc_duration_ms', 'push_duration_ms',
+        'verify_duration_ms', 'dynamic_update_total_ms',
+        'r_commit_margin_sec', 'r_commit_margin_m', 'failure_reason',
+    )
 
     def _format_human_event(self, record):
         timestamp = str(record.get('time', ''))
@@ -318,11 +363,22 @@ class FlightSummaryLoggerNode(Node):
                 f'  original: {record.get("original_count")}  '
                 f'composite: {record.get("total_count")}\n'
                 f'  A={record.get("a_seq")} '
+                f'U={record.get("u_seq")} '
                 f'R={record.get("r_seq")} '
                 f'RELEASE={record.get("release_seq")} '
                 f'D={record.get("d_seq")}\n'
                 f'  verified: {"YES" if record.get("verified") else "NO"}'
             )
+
+        if event in self._ABURCD_EVENTS:
+            lines = [f'[{timestamp}] ABURCD  {event.upper()}']
+            for key in self._ABURCD_METRIC_FIELDS:
+                if key in {'time', 'event', 'task_id'}:
+                    continue
+                value = record.get(key)
+                if value is not None:
+                    lines.append(f'  {key}: {value}')
+            return '\n'.join(lines)
 
         if event in {'composite_mission_failed', 'composite_mission_rejected'}:
             title = 'FAILED' if event.endswith('failed') else 'REJECTED'
@@ -445,7 +501,7 @@ class FlightSummaryLoggerNode(Node):
             )
 
         if event == 'composite_mission_completed':
-            return (
+            base = (
                 f'[{timestamp}] RESULT   Attack segment COMPLETE\n'
                 f'  A-B trajectory: '
                 f'{"PASS" if record.get("ab_track_passed") else "FAIL"}\n'
@@ -453,6 +509,28 @@ class FlightSummaryLoggerNode(Node):
                 f'{"YES" if record.get("c_confirmed") else "NO"}\n'
                 f'  C min distance: '
                 f'{self._format_number(record.get("c_min_distance_m"), " m")}'
+            )
+            metric = self._aburcd_metrics
+            return (
+                base
+                + '\n\nABURCD UPDATE SUMMARY\n'
+                + 'B snapshot latency: '
+                + self._metric_text(metric.get('snapshot_latency_ms'), ' ms')
+                + '\nDynamic R calculation: '
+                + self._metric_text(metric.get('calc_duration_ms'), ' ms')
+                + '\nPartial mission update: '
+                + self._metric_text(metric.get('push_duration_ms'), ' ms')
+                + '\nMission verification: '
+                + self._metric_text(metric.get('verify_duration_ms'), ' ms')
+                + '\nTotal B_CROSSED -> R_PUSH_VERIFIED: '
+                + self._metric_text(
+                    metric.get('dynamic_update_total_ms'), ' ms'
+                )
+                + '\nR commit time margin: '
+                + self._metric_text(metric.get('r_commit_margin_sec'), ' s')
+                + '\nR commit distance margin: '
+                + self._metric_text(metric.get('r_commit_margin_m'), ' m')
+                + f'\nResult: {metric.get("result", "NOT OBSERVED")}'
             )
 
         if event == 'fcu_connection_changed':
@@ -495,6 +573,12 @@ class FlightSummaryLoggerNode(Node):
         if isinstance(value, (int, float)) and math.isfinite(float(value)):
             return f'{float(value):.2f}{suffix}'
         return 'unknown'
+
+    @staticmethod
+    def _metric_text(value, suffix=''):
+        if isinstance(value, (int, float)) and math.isfinite(float(value)):
+            return f'{float(value):.3f}{suffix}'
+        return 'NOT OBSERVED'
 
     def safety_state_callback(self, msg):
         state = str(msg.data)
@@ -558,12 +642,14 @@ class FlightSummaryLoggerNode(Node):
         self.active_task_id = task_id
         if task_id == 'none':
             self.a_seq = None
+            self.u_seq = None
             self.r_seq = None
             self.release_seq = None
             self.d_seq = None
             self.r_point = None
             self._r_reached_logged = False
             self._payload_flags.clear()
+            self._aburcd_metrics.clear()
         self.write_event(
             'active_task_changed',
             previous_task_id=previous,
@@ -680,6 +766,7 @@ class FlightSummaryLoggerNode(Node):
 
         if name == 'composite_mission_uploaded':
             self.a_seq = self._coerce_optional_int(event.get('a_seq'))
+            self.u_seq = self._coerce_optional_int(event.get('u_seq'))
             self.r_seq = self._coerce_optional_int(event.get('r_seq'))
             self.release_seq = self._coerce_optional_int(event.get('release_seq'))
             self.d_seq = self._coerce_optional_int(event.get('d_seq'))
@@ -695,6 +782,40 @@ class FlightSummaryLoggerNode(Node):
                         }
                     except (KeyError, TypeError, ValueError):
                         self.r_point = None
+
+        if name == 'r_push_verified':
+            try:
+                self.r_point = {
+                    'lat': float(event['dynamic_r_lat']),
+                    'lon': float(event['dynamic_r_lon']),
+                }
+            except (KeyError, TypeError, ValueError):
+                pass
+
+        if name in self._ABURCD_EVENTS:
+            for key in (
+                'snapshot_latency_ms', 'calc_duration_ms', 'push_duration_ms',
+                'verify_duration_ms', 'dynamic_update_total_ms',
+                'r_commit_margin_sec', 'r_commit_margin_m', 'failure_reason',
+            ):
+                if event.get(key) is not None:
+                    self._aburcd_metrics[key] = event[key]
+            if name == 'r_push_verified':
+                self._aburcd_metrics['result'] = 'DYNAMIC_R'
+            elif name in {
+                'r_calc_failed', 'r_dynamic_out_of_range',
+                'r_push_verify_failed',
+            }:
+                self._aburcd_metrics['result'] = 'R_SAFE_FALLBACK'
+            elif name in {
+                'r_push_failed', 'r_update_rejected_mission_busy'
+            }:
+                self._aburcd_metrics['result'] = 'UPDATE_FAILED'
+            elif name in {
+                'r_update_rejected_late',
+                'error_r_active_before_update_verified',
+            }:
+                self._aburcd_metrics['result'] = 'UPDATE_TOO_LATE'
 
         self.write_event(name, **event)
 
@@ -739,7 +860,7 @@ class FlightSummaryLoggerNode(Node):
         if self.r_seq is not None and seq == self.r_seq and not self._r_reached_logged:
             self._r_reached_logged = True
             self.write_event(
-                'r_reached',
+                'r_reached_local_observation',
                 seq=seq,
                 altitude_m=self._gps_altitude(),
                 relative_altitude_m=self.last_relative_alt_m,
