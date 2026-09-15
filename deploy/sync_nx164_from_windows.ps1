@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$JetsonHost = "192.168.55.2",
-    [string]$JetsonUser = "nx164"
+    [string]$JetsonUser = "nx164",
+    [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
@@ -40,6 +41,31 @@ try {
     Invoke-Git merge --ff-only origin/main
 
     $commit = (& git rev-parse HEAD).Trim()
+
+    if (-not $Force) {
+        Write-Host "[INFO] Checking the currently deployed NX164 version..."
+        $remoteVersionCommand = @'
+repo="$HOME/2026CUADC-UAV-Competiton_system"
+state="$HOME/.local/state/cuadc-uav/deployed.env"
+repo_commit="$(git -C "$repo" rev-parse HEAD 2>/dev/null || true)"
+deployed_commit="$(sed -n 's/^COMMIT=//p' "$state" 2>/dev/null | tail -n 1)"
+built_commit="$(sed -n 's/^BUILT_COMMIT=//p' "$state" 2>/dev/null | tail -n 1)"
+printf '%s|%s|%s\n' "$repo_commit" "$deployed_commit" "$built_commit"
+'@
+        $remoteVersion = (
+            & ssh -o BatchMode=yes -o ConnectTimeout=5 `
+                "${JetsonUser}@${JetsonHost}" $remoteVersionCommand
+        ).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not query the deployed NX164 version."
+        }
+        if ($remoteVersion -eq "$commit|$commit|$commit") {
+            Write-Host "[OK] NX164 already has built commit $commit; nothing to sync."
+            Write-Host "[NOTE] Pass -Force to back up, redeploy, and rebuild the same commit."
+            return
+        }
+    }
+
     Write-Host "[INFO] Packaging commit $commit..."
     Invoke-Git bundle create $bundle main
 
