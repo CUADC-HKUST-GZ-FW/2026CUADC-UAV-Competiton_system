@@ -3,11 +3,12 @@ set -Eeuo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: ./deploy/update_jetson.sh [--check|--apply]
+Usage: ./deploy/update_jetson.sh [--check|--apply|--apply-local]
 
 Update NX163 or NX164 from origin/main.
   --check  Fetch and preview the deployment without changing live files.
   --apply  Fast-forward main, back up and sync live files, then rebuild ROS 2.
+  --apply-local  Deploy the current clean commit without contacting GitHub.
 
 This script never starts, stops, or restarts flight/vision processes.
 Device camera identity, intrinsics, distortion, and extrinsics are preserved.
@@ -18,6 +19,7 @@ mode="check"
 case "${1:---check}" in
     --check) mode="check" ;;
     --apply) mode="apply" ;;
+    --apply-local) mode="apply-local" ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
 esac
@@ -54,8 +56,10 @@ if [[ "${branch}" != "main" ]]; then
     exit 1
 fi
 
-echo "[INFO] fetching origin/main..."
-git -C "${REPO_ROOT}" fetch origin main
+if [[ "${mode}" != "apply-local" ]]; then
+    echo "[INFO] fetching origin/main..."
+    git -C "${REPO_ROOT}" fetch origin main
+fi
 
 if [[ "${mode}" == "check" ]]; then
     current="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
@@ -67,8 +71,12 @@ if [[ "${mode}" == "check" ]]; then
     exit 0
 fi
 
-echo "[INFO] fast-forwarding main..."
-git -C "${REPO_ROOT}" merge --ff-only origin/main
+if [[ "${mode}" == "apply" ]]; then
+    echo "[INFO] fast-forwarding main..."
+    git -C "${REPO_ROOT}" merge --ff-only origin/main
+else
+    echo "[INFO] deploying current local commit without a GitHub fetch."
+fi
 
 echo "[INFO] backing up and syncing live runtime trees..."
 "${REPO_ROOT}/deploy/sync_local_jetson.sh" --apply
