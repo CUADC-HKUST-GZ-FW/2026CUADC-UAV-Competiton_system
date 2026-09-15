@@ -379,6 +379,35 @@ mkdir -p "${RESULT_DIR}"
 echo "${MODE}" >"${ROOT}/configs/youth_runtime_mode.txt"
 ln -sfn "sessions/${SESSION_ID}" "${ROOT}/recon_results/latest"
 
+# Preserve untouched camera frames for later review and training. Recording is
+# bounded and is skipped when the configured output volume has less than 2 GiB.
+if [[ "${YOUTH_SAVE_RAW_VIDEO:-1}" == "1" && -z "${YOUTH_RECORD_FILE:-}" ]]; then
+    raw_dir="${YOUTH_RAW_VIDEO_DIR:-/home/nx163/camera_recordings}"
+    mkdir -p "${raw_dir}"
+    available_kb="$(df -Pk "${raw_dir}" | awk 'NR==2 {print $4}')"
+    if [[ -n "${available_kb}" && "${available_kb}" -ge "${YOUTH_RAW_MIN_FREE_KB:-2097152}" ]]; then
+        export YOUTH_RECORD_FILE="${raw_dir}/camera_${STAMP}_1440x1080_${MODE}_single_fusion_raw_no_overlay.mp4"
+        export YOUTH_RECORD_DURATION_SEC="${YOUTH_RECORD_DURATION_SEC:-600}"
+        export YOUTH_RECORD_FPS="${YOUTH_RECORD_FPS:-60}"
+        export YOUTH_RECORD_BITRATE_KBPS="${YOUTH_RECORD_BITRATE_KBPS:-12000}"
+    else
+        echo "warning: raw recording disabled because ${raw_dir} has insufficient free space" >&2
+    fi
+fi
+
+vision_args=(
+    --config "${ROOT}/configs/youth_pipeline.yaml"
+    --class-mode "${MODE}"
+)
+if [[ -n "${YOUTH_RECORD_FILE:-}" ]]; then
+    vision_args+=(
+        --record-file "${YOUTH_RECORD_FILE}"
+        --record-duration-sec "${YOUTH_RECORD_DURATION_SEC:-600}"
+        --record-fps "${YOUTH_RECORD_FPS:-60}"
+        --record-bitrate-kbps "${YOUTH_RECORD_BITRATE_KBPS:-12000}"
+    )
+fi
+
 sudo -n /usr/sbin/nvpmodel -m 0 >/dev/null
 sudo -n /usr/bin/jetson_clocks >/dev/null
 
@@ -387,8 +416,7 @@ setsid env \
     YOUTH_RECOGNITION_LOG="${EVENT_LOG}" \
     LD_LIBRARY_PATH="/opt/MVS/lib/aarch64:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu/nvidia" \
     "${ROOT}/native/build/youth_vision_runner" \
-    --config "${ROOT}/configs/youth_pipeline.yaml" \
-    --class-mode "${MODE}" \
+    "${vision_args[@]}" \
     >"${VISION_LOG}" 2>&1 </dev/null {LOCK_FD}>&- &
 vision_pid=$!
 register_child "${vision_pid}" "vision_runner" "${RUN_DIR}/recon_vision.pid"
@@ -503,6 +531,11 @@ echo "flight_log=${FLIGHT_LOG}"
 echo "vision_log=${VISION_LOG}"
 echo "recon_log=${RECON_LOG}"
 echo "bridge_log=${BRIDGE_LOG}"
+if [[ -n "${YOUTH_RECORD_FILE:-}" ]]; then
+    echo "record_file=${YOUTH_RECORD_FILE}"
+    echo "record_duration_sec=${YOUTH_RECORD_DURATION_SEC:-600}"
+    echo "record_content=raw_camera_frames_without_model_overlay"
+fi
 if [[ "${UAV_DETACHED:-0}" == "1" ]]; then
     echo "stop_command=${UAV_ENTRY_SCRIPT_DIR}/stop_detached_uav.sh single"
 else
