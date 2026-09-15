@@ -4,7 +4,7 @@ from collections import deque
 from dataclasses import dataclass, field
 import math
 import statistics
-from typing import Callable, Deque, Generic, List, Optional, Sequence, Tuple, TypeVar
+from typing import Callable, Deque, Dict, Generic, List, Optional, Sequence, Tuple, TypeVar
 
 
 EARTH_A_M = 6378137.0
@@ -341,6 +341,9 @@ class Observation:
     global_anchor_age_sec: float = 0.0
     local_position_method: str = 'none'
     local_delta_enu_m: Sequence[float] = field(default_factory=lambda: (0.0, 0.0, 0.0))
+    frame_number: int = -1
+    source_sequence: int = 0
+    center_px: Sequence[float] = field(default_factory=lambda: (0.0, 0.0))
 
 
 def image_center_weight(
@@ -414,13 +417,40 @@ class Track:
             for weight, point in zip(weights, kept)
         ) / total_weight
         radius95 = 2.45 * math.sqrt(scatter_sq + input_sigma_sq)
-        votes = {}
+        label_counts = {}
+        label_scores = {}
+        best_by_label = {}
         for item, _, _ in kept:
-            votes[item.label] = votes.get(item.label, 0.0) + max(0.01, item.confidence * item.pose_score)
-        label = max(votes, key=votes.get)
-        consensus = votes[label] / sum(votes.values())
+            label_counts[item.label] = label_counts.get(item.label, 0) + 1
+            label_scores[item.label] = label_scores.get(item.label, 0.0) + max(
+                0.01,
+                item.confidence * item.pose_score,
+            )
+            current_best = best_by_label.get(item.label)
+            if current_best is None or (
+                item.confidence
+                * item.pose_score
+                * image_center_weight(
+                    item.center_distance_norm,
+                    center_weight_minimum,
+                    center_weight_power,
+                )
+                > current_best.confidence
+                * current_best.pose_score
+                * image_center_weight(
+                    current_best.center_distance_norm,
+                    center_weight_minimum,
+                    center_weight_power,
+                )
+            ):
+                best_by_label[item.label] = item
+        label = max(
+            label_counts,
+            key=lambda item: (label_counts[item], label_scores[item], item),
+        )
+        consensus = label_counts[label] / sum(label_counts.values())
         label_items = [point[0] for point in kept if point[0].label == label]
-        best = max(label_items, key=lambda item: item.confidence * item.pose_score)
+        best = best_by_label[label]
         return {
             'latitude': latitude,
             'longitude': longitude,
@@ -430,8 +460,15 @@ class Track:
             'class_id': best.class_id,
             'confidence': max(item.confidence for item in label_items),
             'label_consensus': consensus,
+            'label_counts': label_counts,
+            'label_scores': label_scores,
+            'best_by_label': best_by_label,
             'observation_count': len(kept),
+            'raw_observation_count': len(points),
+            'rejected_observation_count': len(points) - len(kept),
             'observation_span_sec': max(item.timestamp for item, _, _ in kept) - min(item.timestamp for item, _, _ in kept),
+            'observation_start_timestamp': min(item.timestamp for item, _, _ in kept),
+            'observation_end_timestamp': max(item.timestamp for item, _, _ in kept),
             'mean_center_weight': sum(center_weights) / len(center_weights),
             'best': best,
         }
@@ -456,3 +493,322 @@ class TrackManager:
             self.tracks.append(closest)
         closest.add(observation)
         return closest
+
+
+@dataclass
+class FramePacket:
+    packet_id: str
+    label: str
+    observations: List[Observation] = field(default_factory=list)
+    last_timestamp: float = 0.0
+    last_center_px: Sequence[float] = field(default_factory=lambda: (0.0, 0.0))
+    last_frame_number: int = -1
+
+    def add(self, observation: Observation):
+        self.observations.append(observation)
+        self.last_timestamp = observation.timestamp
+        self.last_center_px = tuple(float(value) for value in observation.center_px[:2])
+        self.last_frame_number = observation.frame_number
+
+    def fuse(
+        self,
+        single_observation_sigma_m: float,
+        center_weight_minimum: float = 0.25,
+        center_weight_power: float = 1.0,
+    ):
+        fused = Track(self.packet_id, list(self.observations)).fuse(
+            single_observation_sigma_m,
+            center_weight_minimum,
+            center_weight_power,
+        )
+        fused['packet_ids'] = [self.packet_id]
+        fused['packet_count'] = 1
+        return fused
+
+
+@dataclass
+class FramePacketGroup:
+    label: str
+    packets: List[FramePacket]
+    closure_reason: str = 'gap_timeout'
+
+
+class PixelFramePacketManager:
+    """Build pixel-continuous tracks before label voting or geolocation fusion."""
+
+    def __init__(
+        self,
+        gap_timeout_sec: float = 0.20,
+        pixel_gate_base_px: float = 25.0,
+        pixel_gate_rate_px_per_sec: float = 1300.0,
+        pixel_gate_max_px: float = 200.0,
+        max_observations: int = 300,
+    ):
+        self.gap_timeout_sec = max(0.01, float(gap_timeout_sec))
+        self.pixel_gate_base_px = max(0.0, float(pixel_gate_base_px))
+        self.pixel_gate_rate_px_per_sec = max(0.0, float(pixel_gate_rate_px_per_sec))
+        self.pixel_gate_max_px = max(1.0, float(pixel_gate_max_px))
+        self.max_observations = max(1, int(max_observations))
+        self.active: List[FramePacket] = []
+        self.pending: List[FramePacket] = []
+        self.last_observation_timestamp: Optional[float] = None
+        self.packet_counter = 0
+
+    def pixel_gate(self, delta_sec: float) -> float:
+        return min(
+            self.pixel_gate_max_px,
+            self.pixel_gate_base_px
+            + self.pixel_gate_rate_px_per_sec * max(0.0, float(delta_sec)),
+        )
+
+    def add(self, observation: Observation) -> FramePacket:
+        if len(observation.center_px) < 2:
+            raise ValueError('pixel packet observation requires center_px')
+        candidates = []
+        for packet in self.active:
+            if len(packet.observations) >= self.max_observations:
+                continue
+            delta_sec = observation.timestamp - packet.last_timestamp
+            if delta_sec < 0.0 or delta_sec > self.gap_timeout_sec:
+                continue
+            if (
+                observation.frame_number >= 0
+                and packet.last_frame_number == observation.frame_number
+            ):
+                continue
+            distance_px = math.hypot(
+                float(observation.center_px[0]) - float(packet.last_center_px[0]),
+                float(observation.center_px[1]) - float(packet.last_center_px[1]),
+            )
+            gate_px = self.pixel_gate(delta_sec)
+            if distance_px <= gate_px:
+                candidates.append((distance_px / gate_px, distance_px, packet))
+
+        if candidates:
+            packet = min(candidates, key=lambda item: (item[0], item[1]))[2]
+        else:
+            self.packet_counter += 1
+            packet = FramePacket(
+                f'packet_{self.packet_counter:04d}',
+                str(observation.label),
+            )
+            self.active.append(packet)
+        packet.add(observation)
+        self.last_observation_timestamp = observation.timestamp
+        return packet
+
+    def advance(self, timestamp: float) -> List[FramePacketGroup]:
+        still_active = []
+        for packet in self.active:
+            if timestamp - packet.last_timestamp > self.gap_timeout_sec:
+                self.pending.append(packet)
+            else:
+                still_active.append(packet)
+        self.active = still_active
+
+        if (
+            self.pending
+            and not self.active
+            and self.last_observation_timestamp is not None
+            and timestamp - self.last_observation_timestamp > self.gap_timeout_sec
+        ):
+            return self._take_group('gap_timeout')
+        return []
+
+    def take_limit_reached_group(self) -> List[FramePacketGroup]:
+        if not any(
+            len(packet.observations) >= self.max_observations
+            for packet in self.active
+        ):
+            return []
+        self.pending.extend(self.active)
+        self.active = []
+        return self._take_group('max_observations')
+
+    def _take_group(self, closure_reason: str) -> List[FramePacketGroup]:
+        packets = self.pending
+        self.pending = []
+        self.last_observation_timestamp = None
+        labels = {
+            observation.label
+            for packet in packets
+            for observation in packet.observations
+        }
+        label = next(iter(labels)) if len(labels) == 1 else 'mixed'
+        return [FramePacketGroup(label, packets, closure_reason)]
+
+    @property
+    def active_packet_count(self) -> int:
+        return len(self.active)
+
+    @property
+    def pending_packet_count(self) -> int:
+        return len(self.pending)
+
+
+def _merge_packet_candidates(left, right):
+    left_count = int(left['observation_count'])
+    right_count = int(right['observation_count'])
+    total_count = left_count + right_count
+    east, north = geodetic_delta_m(
+        left['latitude'],
+        left['longitude'],
+        right['latitude'],
+        right['longitude'],
+    )
+    right_ratio = right_count / total_count
+    latitude, longitude = enu_to_geodetic(
+        left['latitude'],
+        left['longitude'],
+        east * right_ratio,
+        north * right_ratio,
+    )
+    left_distance = math.hypot(east * right_ratio, north * right_ratio)
+    right_distance = math.hypot(east * (1.0 - right_ratio), north * (1.0 - right_ratio))
+    left_sigma = float(left['horizontal_radius_95_m']) / 2.45
+    right_sigma = float(right['horizontal_radius_95_m']) / 2.45
+    variance = (
+        left_count * (left_sigma ** 2 + left_distance ** 2)
+        + right_count * (right_sigma ** 2 + right_distance ** 2)
+    ) / total_count
+    label_counts = dict(left.get('label_counts', {left['label']: left_count}))
+    for label, count in right.get(
+        'label_counts',
+        {right['label']: right_count},
+    ).items():
+        label_counts[label] = label_counts.get(label, 0) + int(count)
+    label_scores = dict(
+        left.get('label_scores', {left['label']: float(left['confidence'])})
+    )
+    for label, score in right.get(
+        'label_scores',
+        {right['label']: float(right['confidence'])},
+    ).items():
+        label_scores[label] = label_scores.get(label, 0.0) + float(score)
+    best_by_label = dict(left.get('best_by_label', {left['label']: left['best']}))
+    for label, observation in right.get(
+        'best_by_label',
+        {right['label']: right['best']},
+    ).items():
+        current = best_by_label.get(label)
+        if current is None or (
+            observation.confidence * observation.pose_score
+            > current.confidence * current.pose_score
+        ):
+            best_by_label[label] = observation
+    label = max(
+        label_counts,
+        key=lambda item: (label_counts[item], label_scores[item], item),
+    )
+    best = best_by_label[label]
+    return {
+        **left,
+        'latitude': latitude,
+        'longitude': longitude,
+        'altitude_msl_m': (
+            left_count * float(left['altitude_msl_m'])
+            + right_count * float(right['altitude_msl_m'])
+        ) / total_count,
+        'horizontal_radius_95_m': 2.45 * math.sqrt(variance),
+        'label': label,
+        'class_id': best.class_id,
+        'confidence': best.confidence,
+        'label_consensus': label_counts[label] / sum(label_counts.values()),
+        'label_counts': label_counts,
+        'label_scores': label_scores,
+        'best_by_label': best_by_label,
+        'observation_count': total_count,
+        'raw_observation_count': (
+            int(left.get('raw_observation_count', left_count))
+            + int(right.get('raw_observation_count', right_count))
+        ),
+        'rejected_observation_count': (
+            int(left.get('rejected_observation_count', 0))
+            + int(right.get('rejected_observation_count', 0))
+        ),
+        'observation_start_timestamp': min(
+            float(left['observation_start_timestamp']),
+            float(right['observation_start_timestamp']),
+        ),
+        'observation_end_timestamp': max(
+            float(left['observation_end_timestamp']),
+            float(right['observation_end_timestamp']),
+        ),
+        'observation_span_sec': max(
+            float(left['observation_end_timestamp']),
+            float(right['observation_end_timestamp']),
+        ) - min(
+            float(left['observation_start_timestamp']),
+            float(right['observation_start_timestamp']),
+        ),
+        'mean_center_weight': (
+            left_count * float(left['mean_center_weight'])
+            + right_count * float(right['mean_center_weight'])
+        ) / total_count,
+        'best': best,
+        'packet_ids': list(left.get('packet_ids', [])) + list(right.get('packet_ids', [])),
+        'packet_count': int(left.get('packet_count', 1)) + int(right.get('packet_count', 1)),
+    }
+
+
+def resolve_packet_candidates(
+    candidates: Sequence[dict],
+    merge_distance_m: float = 1.5,
+    distinct_distance_m: float = 10.0,
+):
+    """Merge, reject, or separate finalized packet coordinates."""
+    merge_distance_m = max(0.0, float(merge_distance_m))
+    distinct_distance_m = max(merge_distance_m, float(distinct_distance_m))
+    ordered = sorted(
+        (dict(candidate) for candidate in candidates),
+        key=lambda item: (
+            int(item['observation_count']),
+            -float(item['horizontal_radius_95_m']),
+            float(item['confidence']),
+        ),
+        reverse=True,
+    )
+    winners = []
+    decisions = []
+    for candidate in ordered:
+        distances = []
+        for index, winner in enumerate(winners):
+            east, north = geodetic_delta_m(
+                winner['latitude'],
+                winner['longitude'],
+                candidate['latitude'],
+                candidate['longitude'],
+            )
+            distances.append((math.hypot(east, north), index))
+
+        merge_matches = [item for item in distances if item[0] <= merge_distance_m]
+        if merge_matches:
+            distance, index = min(merge_matches)
+            previous_ids = list(winners[index].get('packet_ids', []))
+            candidate_ids = list(candidate.get('packet_ids', []))
+            winners[index] = _merge_packet_candidates(winners[index], candidate)
+            decisions.append({
+                'action': 'merge',
+                'distance_m': distance,
+                'kept_packet_ids': previous_ids,
+                'merged_packet_ids': candidate_ids,
+            })
+            continue
+
+        conflicts = [item for item in distances if item[0] < distinct_distance_m]
+        if conflicts:
+            distance, index = min(conflicts)
+            decisions.append({
+                'action': 'discard_smaller_packet',
+                'distance_m': distance,
+                'kept_packet_ids': list(winners[index].get('packet_ids', [])),
+                'discarded_packet_ids': list(candidate.get('packet_ids', [])),
+            })
+            continue
+
+        winners.append(candidate)
+        decisions.append({
+            'action': 'keep_distinct',
+            'packet_ids': list(candidate.get('packet_ids', [])),
+        })
+    return winners, decisions

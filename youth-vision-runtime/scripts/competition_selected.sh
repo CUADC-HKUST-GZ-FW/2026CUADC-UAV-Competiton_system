@@ -99,6 +99,7 @@ else
   )
   if [[ -n "${RECON_STATIC_HEIGHT_M:-}" ]]; then
     recon_command+=(
+      -p tracking_mode:=legacy_geo_cluster
       -p ground_altitude_mode:=fixed_relative
       -p "fixed_relative_altitude_m:=$RECON_STATIC_HEIGHT_M"
       -p "max_horizontal_radius_95_m:=${RECON_MAX_HORIZONTAL_RADIUS_95_M:-0.5}"
@@ -124,8 +125,12 @@ fi
 session_root="$(readlink -f "$ROOT/recon_results/latest")"
 session_id="$(basename "$session_root")"
 selector_log="$LOG_DIR/competition_selector_${session_id}.log"
+selector_status_arg=""
+if [[ -n "${RECON_STATIC_HEIGHT_M:-}" ]]; then
+  selector_status_arg=" --allow-confirmed"
+fi
 
-setsid bash -lc "source /opt/ros/humble/setup.bash; source '$ROS_WS/install/setup.bash'; exec python3 '$ROOT/scripts/competition_selector.py' --mode '$MODE' --session-root '$session_root' --required-targets 3 --dedup-radius-m 3.0 --settle-sec 3.0" \
+setsid bash -lc "source /opt/ros/humble/setup.bash; source '$ROS_WS/install/setup.bash'; exec python3 '$ROOT/scripts/competition_selector.py' --mode '$MODE' --session-root '$session_root' --required-targets 3 --dedup-radius-m 3.0 --settle-sec 1.0${selector_status_arg}" \
   > "$selector_log" 2>&1 </dev/null &
 selector_pid=$!
 echo "$selector_pid" > "$PID_FILE"

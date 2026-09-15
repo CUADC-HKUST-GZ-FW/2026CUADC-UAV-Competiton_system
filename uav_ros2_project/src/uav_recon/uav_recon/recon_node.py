@@ -23,15 +23,18 @@ from uav_interfaces.msg import ReconTarget
 from .core import (
     CameraModel,
     Observation,
+    PixelFramePacketManager,
     TimedBuffer,
     TrackManager,
     geodetic_delta_m,
     hermite_tuple,
+    image_center_weight,
     is_empty_target_label,
     lerp_tuple,
     project_pixel_to_ground,
     propagate_geodetic_with_local_delta,
     quat_slerp,
+    resolve_packet_candidates,
 )
 
 
@@ -86,7 +89,23 @@ class ReconGeolocatorNode(Node):
         self.local_velocity_arrivals = deque(maxlen=240)
         self.relative_altitudes = TimedBuffer(15.0)
         self.rtk_fixes = TimedBuffer(15.0)
+        self.tracking_mode = str(self.get_parameter('tracking_mode').value)
+        if self.tracking_mode not in {'pixel_packets', 'legacy_geo_cluster'}:
+            raise ValueError(
+                'tracking_mode must be pixel_packets or legacy_geo_cluster'
+            )
         self.tracks = TrackManager(float(self.get_parameter('association_radius_m').value))
+        self.frame_packets = PixelFramePacketManager(
+            float(self.get_parameter('packet_gap_timeout_sec').value),
+            float(self.get_parameter('packet_pixel_gate_base_px').value),
+            float(self.get_parameter('packet_pixel_gate_rate_px_per_sec').value),
+            float(self.get_parameter('packet_pixel_gate_max_px').value),
+            int(self.get_parameter('packet_max_observations').value),
+        )
+        self.final_target_count = 0
+        self.packet_snapshot_scores = {}
+        self.packet_clock_capture_time = None
+        self.packet_clock_monotonic = None
         self.last_manifest_key = None
         self.pending_manifests = deque()
         self.last_status = None
@@ -151,7 +170,8 @@ class ReconGeolocatorNode(Node):
             f'recon ready: manifest={self.manifest_path}, output={self.output_root}, '
             f'camera tilt={self.get_parameter("camera_forward_tilt_deg").value:.1f} deg forward, '
             f'{self.get_parameter("camera_left_tilt_deg").value:.1f} deg left, '
-            f'position={self.get_parameter("position_solution_mode").value}'
+            f'position={self.get_parameter("position_solution_mode").value}, '
+            f'tracking={self.tracking_mode}'
         )
 
     def _declare_parameters(self):
@@ -195,6 +215,15 @@ class ReconGeolocatorNode(Node):
             'ground_altitude_mode': 'home_relative',
             'fixed_ground_altitude_msl_m': 0.0,
             'fixed_relative_altitude_m': 0.0,
+            'tracking_mode': 'pixel_packets',
+            'packet_gap_timeout_sec': 0.20,
+            'packet_pixel_gate_base_px': 25.0,
+            'packet_pixel_gate_rate_px_per_sec': 1300.0,
+            'packet_pixel_gate_max_px': 200.0,
+            'packet_max_observations': 300,
+            'packet_min_observations': 11,
+            'packet_merge_distance_m': 1.5,
+            'packet_distinct_distance_m': 10.0,
             'association_radius_m': 3.0,
             'minimum_observations': 5,
             'minimum_observation_span_sec': 0.20,
@@ -399,12 +428,35 @@ class ReconGeolocatorNode(Node):
                         f'pending vision manifests exceeded {maximum}',
                     )
         self._drain_pending_manifests()
+        if self.tracking_mode == 'pixel_packets' and not self.pending_manifests:
+            packet_time = self._packet_time_now()
+            if packet_time is not None:
+                self._finalize_packet_groups(
+                    self.frame_packets.advance(packet_time)
+                )
 
     def _drain_pending_manifests(self):
         while self.pending_manifests:
-            if not self._process_manifest(self.pending_manifests[0]):
+            manifest = self.pending_manifests[0]
+            if not self._process_manifest(manifest):
                 return
+            if self.tracking_mode == 'pixel_packets':
+                capture_ns = int(manifest.get('capture_timestamp_unix_ns', 0))
+                if capture_ns > 0:
+                    self.packet_clock_capture_time = capture_ns * 1e-9
+                    self.packet_clock_monotonic = time.monotonic()
             self.pending_manifests.popleft()
+
+    def _packet_time_now(self):
+        if (
+            self.packet_clock_capture_time is None
+            or self.packet_clock_monotonic is None
+        ):
+            return None
+        return self.packet_clock_capture_time + max(
+            0.0,
+            time.monotonic() - self.packet_clock_monotonic,
+        )
 
     def _local_position_at(self, timestamp):
         max_gap = float(self.get_parameter('local_position_max_gap_sec').value)
@@ -599,7 +651,11 @@ class ReconGeolocatorNode(Node):
             return True
         camera = self._camera_model(frame_width, frame_height)
         crop_root = self.manifest_path.parent
+        if self.tracking_mode == 'pixel_packets':
+            self._finalize_packet_groups(self.frame_packets.advance(capture_time))
         projected = 0
+        frame_number = int(manifest.get('frame', -1))
+        source_sequence = int(manifest.get('source_sequence', 0))
         for crop in manifest.get('crops', []):
             label = str(crop.get('class_label', ''))
             if is_empty_target_label(label):
@@ -630,22 +686,39 @@ class ReconGeolocatorNode(Node):
                 center_distance_norm=min(
                     1.0,
                     math.hypot(
-                        (float(center[0]) - frame_width * 0.5) / (frame_width * 0.5),
-                        (float(center[1]) - frame_height * 0.5) / (frame_height * 0.5),
+                        (float(center[0]) - camera.cx) / (frame_width * 0.5),
+                        (float(center[1]) - camera.cy) / (frame_height * 0.5),
                     ),
                 ),
                 position_source=position_context['position_source'],
                 global_anchor_age_sec=position_context['global_anchor_age_sec'],
                 local_position_method=position_context['local_position_method'],
                 local_delta_enu_m=position_context['local_delta_enu_m'],
+                frame_number=frame_number,
+                source_sequence=source_sequence,
+                center_px=(float(center[0]), float(center[1])),
             )
-            track = self.tracks.add(observation)
-            self._write_track(track)
+            if self.tracking_mode == 'pixel_packets':
+                packet = self.frame_packets.add(observation)
+                self._preserve_packet_snapshot(packet.packet_id, observation)
+            else:
+                track = self.tracks.add(observation)
+                self._write_track(track)
             projected += 1
+        if self.tracking_mode == 'pixel_packets':
+            self._finalize_packet_groups(
+                self.frame_packets.take_limit_reached_group()
+            )
         if projected:
+            tracker_detail = (
+                f'active_packets={self.frame_packets.active_packet_count}, '
+                f'pending_packets={self.frame_packets.pending_packet_count}'
+                if self.tracking_mode == 'pixel_packets'
+                else f'tracks={len(self.tracks.tracks)}'
+            )
             self._set_status(
                 'tracking',
-                f'projected={projected}, tracks={len(self.tracks.tracks)}, '
+                f'projected={projected}, {tracker_detail}, '
                 f'position={position_context["position_source"]}',
             )
         else:
@@ -690,6 +763,139 @@ class ReconGeolocatorNode(Node):
             left_tilt_deg=float(self.get_parameter('camera_left_tilt_deg').value),
         )
 
+    def _preserve_packet_snapshot(self, packet_id, observation):
+        score = (
+            observation.confidence
+            * observation.pose_score
+            * image_center_weight(
+                observation.center_distance_norm,
+                float(self.get_parameter('center_weight_minimum').value),
+                float(self.get_parameter('center_weight_power').value),
+            )
+        )
+        if score <= self.packet_snapshot_scores.get(packet_id, -1.0):
+            return
+        source_frame = Path(observation.frame_path)
+        source_crop = Path(observation.crop_path)
+        if not source_frame.is_file() or not source_crop.is_file():
+            return
+        cache_dir = self.output_root / '.frame_packets' / packet_id
+        frame_destination = cache_dir / 'frame.jpg'
+        crop_destination = cache_dir / 'crop_128.jpg'
+        try:
+            atomic_copy(source_frame, frame_destination)
+            atomic_copy(source_crop, crop_destination)
+        except OSError as error:
+            self.get_logger().warn(
+                f'packet snapshot failed packet_id={packet_id}: {error}'
+            )
+            return
+        observation.frame_path = str(frame_destination)
+        observation.crop_path = str(crop_destination)
+        self.packet_snapshot_scores[packet_id] = score
+
+    def _finalize_packet_groups(self, groups):
+        for group in groups:
+            minimum = max(
+                1,
+                int(self.get_parameter('packet_min_observations').value),
+            )
+            candidates = []
+            rejected = []
+            for packet in group.packets:
+                raw_count = len(packet.observations)
+                if raw_count < minimum:
+                    rejected.append({
+                        'packet_id': packet.packet_id,
+                        'reason': 'insufficient_frames',
+                        'frame_count': raw_count,
+                    })
+                    continue
+                fused = packet.fuse(
+                    float(self.get_parameter('single_observation_sigma_m').value),
+                    float(self.get_parameter('center_weight_minimum').value),
+                    float(self.get_parameter('center_weight_power').value),
+                )
+                if fused['observation_count'] < minimum:
+                    rejected.append({
+                        'packet_id': packet.packet_id,
+                        'reason': 'insufficient_frames_after_outlier_rejection',
+                        'frame_count': fused['observation_count'],
+                        'raw_frame_count': raw_count,
+                    })
+                    continue
+                candidates.append(fused)
+
+            winners, decisions = resolve_packet_candidates(
+                candidates,
+                float(self.get_parameter('packet_merge_distance_m').value),
+                float(self.get_parameter('packet_distinct_distance_m').value),
+            )
+            self.get_logger().info(
+                '[RECON_PACKET] stage=group_finalized '
+                f'label={group.label} closure={group.closure_reason} '
+                f'packets={len(group.packets)} '
+                f'candidates={len(candidates)} winners={len(winners)} '
+                f'rejected={json.dumps(rejected, ensure_ascii=False)} '
+                f'decisions={json.dumps(decisions, ensure_ascii=False)}'
+            )
+            for fused in winners:
+                self.final_target_count += 1
+                target_id = f'target_{self.final_target_count:03d}'
+                packet_metadata = {
+                    'packet_ids': list(fused.get('packet_ids', [])),
+                    'packet_count': int(fused.get('packet_count', 1)),
+                    'raw_observation_count': int(
+                        fused.get('raw_observation_count', fused['observation_count'])
+                    ),
+                    'label_counts': dict(fused.get('label_counts', {})),
+                    'label_vote_method': 'valid_frame_count_majority',
+                    'rejected_observation_count': int(
+                        fused.get('rejected_observation_count', 0)
+                    ),
+                    'gap_timeout_sec': float(
+                        self.get_parameter('packet_gap_timeout_sec').value
+                    ),
+                    'pixel_gate_max_px': float(
+                        self.get_parameter('packet_pixel_gate_max_px').value
+                    ),
+                    'max_observations': int(
+                        self.get_parameter('packet_max_observations').value
+                    ),
+                    'closure_reason': group.closure_reason,
+                    'merge_distance_m': float(
+                        self.get_parameter('packet_merge_distance_m').value
+                    ),
+                    'distinct_distance_m': float(
+                        self.get_parameter('packet_distinct_distance_m').value
+                    ),
+                    'group_decisions': decisions,
+                }
+                self._emit_fused_result(
+                    target_id,
+                    fused,
+                    valid=True,
+                    status='finalized',
+                    fusion_method='pixel_packet_robust_frame_weighted',
+                    packet_metadata=packet_metadata,
+                    throttle=False,
+                )
+                self.get_logger().info(
+                    '[RECON_PACKET] stage=coordinate_finalized '
+                    f'target_id={target_id} label={fused["label"]} '
+                    f'packets={fused.get("packet_count", 1)} '
+                    f'frames={fused["observation_count"]} '
+                    f'lat={fused["latitude"]:.8f} '
+                    f'lon={fused["longitude"]:.8f}'
+                )
+
+            for packet in group.packets:
+                self.packet_snapshot_scores.pop(packet.packet_id, None)
+                shutil.rmtree(
+                    self.output_root / '.frame_packets' / packet.packet_id,
+                    ignore_errors=True,
+                )
+
     def _write_track(self, track):
         fused = track.fuse(
             float(self.get_parameter('single_observation_sigma_m').value),
@@ -703,14 +909,33 @@ class ReconGeolocatorNode(Node):
             and fused['horizontal_radius_95_m'] <= float(self.get_parameter('max_horizontal_radius_95_m').value)
         )
         status = 'confirmed' if valid else 'collecting_observations'
-        target_dir = self.output_root / track.target_id
+        self._emit_fused_result(
+            track.target_id,
+            fused,
+            valid=valid,
+            status=status,
+            fusion_method='legacy_geo_cluster_weighted_mean',
+            throttle=True,
+        )
+
+    def _emit_fused_result(
+        self,
+        target_id,
+        fused,
+        valid,
+        status,
+        fusion_method,
+        packet_metadata=None,
+        throttle=False,
+    ):
+        target_dir = self.output_root / target_id
         frame_destination = target_dir / 'frame.jpg'
         crop_destination = target_dir / 'crop_128.jpg'
         best = fused['best']
         record = {
-            'target_id': track.target_id,
-            'frame_path': f'{track.target_id}/frame.jpg',
-            'crop_path': f'{track.target_id}/crop_128.jpg',
+            'target_id': target_id,
+            'frame_path': f'{target_id}/frame.jpg',
+            'crop_path': f'{target_id}/crop_128.jpg',
             'recognition': {
                 'label': fused['label'],
                 'class_id': fused['class_id'],
@@ -724,9 +949,15 @@ class ReconGeolocatorNode(Node):
                 'horizontal_radius_95_m': round(fused['horizontal_radius_95_m'], 3),
             },
             'observation_count': fused['observation_count'],
+            'raw_observation_count': int(
+                fused.get('raw_observation_count', fused['observation_count'])
+            ),
+            'rejected_observation_count': int(
+                fused.get('rejected_observation_count', 0)
+            ),
             'observation_span_sec': round(fused['observation_span_sec'], 3),
             'coordinate_fusion': {
-                'method': 'confidence_pose_image_center_weighted_mean',
+                'method': fusion_method,
                 'mean_center_weight': round(fused['mean_center_weight'], 6),
             },
             'telemetry_alignment': {
@@ -749,10 +980,12 @@ class ReconGeolocatorNode(Node):
             'valid': valid,
             'status': status,
         }
+        if packet_metadata is not None:
+            record['frame_packet_fusion'] = packet_metadata
         message = ReconTarget()
         message.header.stamp = self.get_clock().now().to_msg()
         message.header.frame_id = 'wgs84'
-        message.target_id = track.target_id
+        message.target_id = target_id
         message.frame_path = record['frame_path']
         message.crop_path = record['crop_path']
         message.label = fused['label']
@@ -770,18 +1003,24 @@ class ReconGeolocatorNode(Node):
 
         now = time.monotonic()
         result_period = 1.0 / max(1.0, float(self.get_parameter('result_write_hz').value))
-        if now - self.last_result_write.get(track.target_id, 0.0) >= result_period:
+        if (
+            not throttle
+            or now - self.last_result_write.get(target_id, 0.0) >= result_period
+        ):
             atomic_json(target_dir / 'result.json', record)
-            self.last_result_write[track.target_id] = now
+            self.last_result_write[target_id] = now
 
         snapshot_period = 1.0 / max(1.0, float(self.get_parameter('snapshot_write_hz').value))
-        if now - self.last_snapshot_write.get(track.target_id, 0.0) >= snapshot_period:
+        if (
+            not throttle
+            or now - self.last_snapshot_write.get(target_id, 0.0) >= snapshot_period
+        ):
             source_frame = Path(best.frame_path)
             source_crop = Path(best.crop_path)
             if source_frame.is_file() and source_crop.is_file():
                 atomic_copy(source_frame, frame_destination)
                 atomic_copy(source_crop, crop_destination)
-                self.last_snapshot_write[track.target_id] = now
+                self.last_snapshot_write[target_id] = now
 
 
 def main(args=None):

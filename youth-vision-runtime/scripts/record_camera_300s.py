@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -24,6 +25,7 @@ sys.path.insert(0, "/opt/MVS/Samples/aarch64/Python")
 
 import cv2
 import numpy as np
+import yaml
 
 from MvImport.MvCameraControl_class import *
 from MvImport.PixelType_header import (
@@ -43,6 +45,7 @@ MAX_DURATION_SECONDS = 300.0
 MIN_FREE_BYTES = 2 * 1024**3
 LOCK_PATH = "/tmp/youth_camera_recording.lock"
 DEFAULT_CAMERA_CONFIG = ROOT / "configs" / "camera_capture.yaml"
+DEFAULT_PIPELINE_CONFIG = ROOT / "configs" / "youth_pipeline.yaml"
 stop_requested = False
 
 
@@ -59,6 +62,17 @@ def parse_args():
         type=Path,
         default=Path(os.environ.get("YOUTH_CAMERA_CONFIG", DEFAULT_CAMERA_CONFIG)),
         help="Shared camera parameter config file.",
+    )
+    parser.add_argument(
+        "--pipeline-config",
+        type=Path,
+        default=Path(os.environ.get("YOUTH_PIPELINE_CONFIG", DEFAULT_PIPELINE_CONFIG)),
+        help="Vision pipeline config used to select the same MVS camera.",
+    )
+    parser.add_argument(
+        "--serial",
+        default=os.environ.get("YOUTH_CAMERA_SERIAL", ""),
+        help="MVS camera serial; defaults to mvs_serial in the pipeline config.",
     )
     parser.add_argument(
         "--sidecar",
@@ -220,24 +234,68 @@ def camera_text(value):
     return raw.split(b"\0", 1)[0].decode("utf-8", errors="replace")
 
 
-def choose_usb_camera(device_list):
-    preferred_serial = os.environ.get("YOUTH_CAMERA_SERIAL", "DA4824869")
-    fallback = None
+def load_pipeline_serial(path):
+    path = Path(path).expanduser()
+    if not path.exists():
+        raise RuntimeError(f"pipeline config does not exist: {path}")
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    serial = str(payload.get("mvs_serial", "")).strip()
+    if not serial:
+        raise RuntimeError(f"mvs_serial is missing from pipeline config: {path}")
+    return serial
+
+
+def mvs_device_serial(device):
+    if device.nTLayerType == MV_USB_DEVICE:
+        return camera_text(device.SpecialInfo.stUsb3VInfo.chSerialNumber)
+    if device.nTLayerType == MV_GIGE_DEVICE:
+        return camera_text(device.SpecialInfo.stGigEInfo.chSerialNumber)
+    return ""
+
+
+def mvs_device_model(device):
+    if device.nTLayerType == MV_USB_DEVICE:
+        return camera_text(device.SpecialInfo.stUsb3VInfo.chModelName)
+    if device.nTLayerType == MV_GIGE_DEVICE:
+        return camera_text(device.SpecialInfo.stGigEInfo.chModelName)
+    return "unknown"
+
+
+def mvs_device_transport(device):
+    if device.nTLayerType == MV_USB_DEVICE:
+        return "USB3Vision"
+    if device.nTLayerType == MV_GIGE_DEVICE:
+        return "GigE"
+    return "unknown"
+
+
+def choose_mvs_camera(device_list, preferred_serial):
+    devices = []
     for index in range(device_list.nDeviceNum):
         device = cast(
             device_list.pDeviceInfo[index], POINTER(MV_CC_DEVICE_INFO)
         ).contents
-        if device.nTLayerType != MV_USB_DEVICE:
+        if device.nTLayerType not in (MV_USB_DEVICE, MV_GIGE_DEVICE):
             continue
-        if fallback is None:
-            fallback = device
-        serial = camera_text(device.SpecialInfo.stUsb3VInfo.chSerialNumber)
+        serial = mvs_device_serial(device)
+        devices.append((device, serial))
+        print(
+            "CAMERA_DISCOVERED "
+            f"index={index} transport={mvs_device_transport(device)} "
+            f"model={mvs_device_model(device)} serial={serial or 'unknown'}",
+            flush=True,
+        )
         if serial == preferred_serial:
             return device, serial
-    if fallback is None:
-        raise RuntimeError("no USB3Vision camera was found")
-    serial = camera_text(fallback.SpecialInfo.stUsb3VInfo.chSerialNumber)
-    return fallback, serial
+    available = ", ".join(serial or "unknown" for _, serial in devices)
+    if not devices:
+        raise RuntimeError("no GigE/USB MVS camera was found")
+    if preferred_serial:
+        raise RuntimeError(
+            f"MVS camera serial {preferred_serial} was not found; "
+            f"available serials: [{available}]"
+        )
+    return devices[0]
 
 
 def read_int(camera, name):
@@ -263,7 +321,7 @@ def read_float(camera, name, fallback):
 
 def default_output_path():
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return Path("/home/nx163/camera_recordings") / (
+    return Path.home() / "camera_recordings" / (
         f"camera_{stamp}_{EXPECTED_WIDTH}x{EXPECTED_HEIGHT}_300s.mp4"
     )
 
@@ -322,20 +380,91 @@ def stop_telemetry_node(node):
         rclpy.shutdown()
 
 
-def build_gstreamer_pipeline(output_path, width, height, fps, bitrate_kbps):
-    location = str(output_path).replace("\\", "\\\\").replace('"', '\\"')
+def build_gstreamer_command(output_path, width, height, fps, bitrate_kbps):
     max_input_bytes = width * height * 3 * 2
     fps_integer = int(round(fps))
-    return (
-        f"appsrc is-live=true format=time block=true max-bytes={max_input_bytes} "
-        f"! video/x-raw,format=BGR,width={width},height={height},framerate={fps_integer}/1 "
-        "! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 "
-        "! videoconvert n-threads=4 ! video/x-raw,format=BGRx "
-        "! nvvidconv ! video/x-raw(memory:NVMM),format=NV12 "
-        f"! nvv4l2h264enc maxperf-enable=true bitrate={bitrate_kbps * 1000} "
-        f"control-rate=1 preset-level=1 iframeinterval={fps_integer} "
-        f"! h264parse ! qtmux ! filesink location=\"{location}\" sync=false"
-    )
+    return [
+        "gst-launch-1.0",
+        "-q",
+        "-e",
+        "fdsrc",
+        "fd=0",
+        f"blocksize={max_input_bytes}",
+        "!",
+        "rawvideoparse",
+        "format=bgr",
+        f"width={width}",
+        f"height={height}",
+        f"framerate={fps_integer}/1",
+        "!",
+        "queue",
+        "max-size-buffers=2",
+        "max-size-bytes=0",
+        "max-size-time=0",
+        "!",
+        "videoconvert",
+        "n-threads=4",
+        "!",
+        "video/x-raw,format=BGRx",
+        "!",
+        "nvvidconv",
+        "!",
+        "video/x-raw(memory:NVMM),format=NV12",
+        "!",
+        "nvv4l2h264enc",
+        "maxperf-enable=true",
+        f"bitrate={bitrate_kbps * 1000}",
+        "control-rate=1",
+        "preset-level=1",
+        f"iframeinterval={fps_integer}",
+        "!",
+        "h264parse",
+        "!",
+        "qtmux",
+        "!",
+        "filesink",
+        f"location={output_path}",
+        "sync=false",
+    ]
+
+
+class GStreamerWriter:
+    def __init__(self, output_path, width, height, fps, bitrate_kbps):
+        command = build_gstreamer_command(
+            output_path, width, height, fps, bitrate_kbps
+        )
+        self.process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+        )
+        time.sleep(0.2)
+        if self.process.poll() is not None:
+            raise RuntimeError(
+                f"GStreamer H.264 encoder exited during startup: {self.process.returncode}"
+            )
+
+    def write(self, frame):
+        if self.process.poll() is not None:
+            raise RuntimeError(
+                f"GStreamer H.264 encoder exited: {self.process.returncode}"
+            )
+        try:
+            self.process.stdin.write(memoryview(frame).cast("B"))
+        except BrokenPipeError as exc:
+            raise RuntimeError("GStreamer H.264 encoder closed its input") from exc
+
+    def release(self):
+        if self.process.stdin is not None and not self.process.stdin.closed:
+            self.process.stdin.close()
+        try:
+            return_code = self.process.wait(timeout=20)
+        except subprocess.TimeoutExpired as exc:
+            self.process.terminate()
+            self.process.wait(timeout=5)
+            raise RuntimeError("GStreamer H.264 encoder did not finalize") from exc
+        if return_code != 0:
+            raise RuntimeError(f"GStreamer H.264 encoder failed: {return_code}")
 
 
 BAYER_CONVERSIONS = {
@@ -374,6 +503,7 @@ def convert_frame(raw_view, frame_length, pixel_type, width, height, bgr):
 
 def main():
     args = parse_args()
+    preferred_serial = args.serial.strip() or load_pipeline_serial(args.pipeline_config)
     output_path = (args.output or default_output_path()).expanduser().resolve()
     if output_path.suffix.lower() != ".mp4":
         raise RuntimeError("hardware recording output must use the .mp4 extension")
@@ -425,12 +555,12 @@ def main():
 
         devices = MV_CC_DEVICE_INFO_LIST()
         require_ok(
-            MvCamera.MV_CC_EnumDevices(MV_USB_DEVICE, devices),
-            "enumerate USB cameras",
+            MvCamera.MV_CC_EnumDevices(MV_GIGE_DEVICE | MV_USB_DEVICE, devices),
+            "enumerate GigE/USB MVS cameras",
         )
         if devices.nDeviceNum == 0:
-            raise RuntimeError("no USB3Vision camera was found")
-        device, serial = choose_usb_camera(devices)
+            raise RuntimeError("no GigE/USB MVS camera was found")
+        device, serial = choose_mvs_camera(devices, preferred_serial)
 
         require_ok(camera.MV_CC_CreateHandle(device), "create camera handle")
         handle_created = True
@@ -456,21 +586,9 @@ def main():
             )
         pixel_type = read_enum(camera, "PixelFormat")
         resulting_fps = read_float(camera, "ResultingFrameRate", args.fps)
-        pipeline = build_gstreamer_pipeline(
+        writer = GStreamerWriter(
             partial_path, width, height, args.fps, args.bitrate_kbps
         )
-        writer = cv2.VideoWriter(
-            pipeline,
-            cv2.CAP_GSTREAMER,
-            0,
-            args.fps,
-            (width, height),
-            True,
-        )
-        if not writer.isOpened():
-            raise RuntimeError(
-                "NVIDIA H.264 writer failed to open; check nvidia-l4t-gstreamer"
-            )
 
         if args.sidecar is not None:
             from geo_bridge.recorder import FrameSidecar

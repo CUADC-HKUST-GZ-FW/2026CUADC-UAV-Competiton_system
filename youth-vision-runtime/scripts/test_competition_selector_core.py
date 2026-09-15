@@ -6,7 +6,14 @@ from competition_selector_core import (
 )
 
 
-def record(target_id, label, latitude, observations=10, confidence=0.98):
+def record(
+    target_id,
+    label,
+    latitude,
+    observations=10,
+    confidence=0.98,
+    status='finalized',
+):
     return normalize_record({
         'target_id': target_id,
         'recognition': {
@@ -24,7 +31,7 @@ def record(target_id, label, latitude, observations=10, confidence=0.98):
         'observation_count': observations,
         'rtk_fixed': True,
         'valid': True,
-        'status': 'confirmed',
+        'status': status,
     })
 
 
@@ -124,6 +131,49 @@ def test_two_nonempty_targets_do_not_finalize():
     )
     assert decision is None
     assert len(representatives) == 2
+
+
+def test_finalized_packet_results_are_eligible():
+    decision, representatives, ignored = choose_competition_target(
+        [
+            record('target_001', '25', 22.0000, status='finalized'),
+            record('target_002', '52', 22.0002, status='finalized'),
+            record('target_003', '69', 22.0004, status='finalized'),
+        ],
+        'digit',
+    )
+    assert not ignored
+    assert len(representatives) == 3
+    assert decision['selected']['label'] == '52'
+
+
+def test_confirmed_results_cannot_trigger_competition_selection():
+    decision, representatives, ignored = choose_competition_target(
+        [
+            record('target_001', '25', 22.0000, status='confirmed'),
+            record('target_002', '52', 22.0002, status='confirmed'),
+            record('target_003', '69', 22.0004, status='confirmed'),
+        ],
+        'digit',
+    )
+    assert decision is None
+    assert not representatives
+    assert not ignored
+
+
+def test_static_legacy_mode_can_explicitly_allow_confirmed_results():
+    decision, representatives, ignored = choose_competition_target(
+        [
+            record('target_001', '25', 22.0000, status='confirmed'),
+            record('target_002', '52', 22.0002, status='confirmed'),
+            record('target_003', '69', 22.0004, status='confirmed'),
+        ],
+        'digit',
+        allow_confirmed=True,
+    )
+    assert not ignored
+    assert len(representatives) == 3
+    assert decision['selected']['label'] == '52'
 
 
 if __name__ == '__main__':

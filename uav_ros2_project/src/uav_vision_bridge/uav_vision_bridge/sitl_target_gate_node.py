@@ -203,8 +203,8 @@ class SitlTargetGate(Node):
 
         if not result.get('valid', False):
             return None, 'target_json_valid_false'
-        if result.get('status') != 'confirmed':
-            return None, 'target_json_status_not_confirmed'
+        if result.get('status') not in {'confirmed', 'finalized'}:
+            return None, 'target_json_status_not_finalized'
 
         try:
             coordinate = result['coordinate']

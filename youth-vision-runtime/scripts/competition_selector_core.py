@@ -127,12 +127,25 @@ def cluster_records(records, radius_m):
     return groups
 
 
-def choose_competition_target(records, mode, required_targets=3, dedup_radius_m=3.0):
+def choose_competition_target(
+    records,
+    mode,
+    required_targets=3,
+    dedup_radius_m=3.0,
+    allow_confirmed=False,
+):
+    accepted_statuses = {'finalized'}
+    if allow_confirmed:
+        accepted_statuses.add('confirmed')
     eligible = []
     for record in records:
         if not record:
             continue
-        if not record['valid'] or record['status'] != 'confirmed' or not record['rtk_fixed']:
+        if (
+            not record['valid']
+            or record['status'] not in accepted_statuses
+            or not record['rtk_fixed']
+        ):
             continue
         value = mode_value(record['label'], mode)
         if value is None:

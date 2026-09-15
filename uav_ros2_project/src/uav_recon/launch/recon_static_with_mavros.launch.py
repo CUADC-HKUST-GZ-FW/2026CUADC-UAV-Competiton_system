@@ -51,6 +51,7 @@ def generate_launch_description():
                 recon_config,
                 {
                     'output_root': output_root,
+                    'tracking_mode': 'legacy_geo_cluster',
                     'ground_altitude_mode': 'fixed_relative',
                     'fixed_relative_altitude_m': ParameterValue(
                         fixed_relative_altitude_m, value_type=float

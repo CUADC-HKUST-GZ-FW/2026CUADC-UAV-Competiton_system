@@ -11,7 +11,7 @@ from uav_interfaces.msg import ReconTarget, TargetCommand
 
 
 class VisionTargetBridge(Node):
-    """Forward one confirmed target to the current auto-execute mission manager."""
+    """Forward one finalized target to the current auto-execute mission manager."""
 
     TERMINAL_PHASES = {'manager_accepted_target', 'failed'}
 
@@ -111,10 +111,10 @@ class VisionTargetBridge(Node):
     def target_callback(self, result):
         if self.target_published or self.pending_target is not None:
             return
-        if not result.valid or result.status != 'confirmed':
+        if not result.valid or result.status != 'finalized':
             return
         if not self.valid_coordinate(result.latitude, result.longitude):
-            self.get_logger().warning('Confirmed target has invalid coordinates')
+            self.get_logger().warning('Finalized target has invalid coordinates')
             return
 
         self.pending_target = result
@@ -125,7 +125,7 @@ class VisionTargetBridge(Node):
             else 'manual_forward_pending'
         )
         self.get_logger().info(
-            'Accepted one confirmed recon target '
+            'Accepted one finalized recon target '
             f'target_id={result.target_id} '
             f'label={result.label} '
             f'confidence={result.confidence:.6f}'
@@ -240,7 +240,7 @@ class VisionTargetBridge(Node):
             self.set_phase('target_forwarded_manual')
 
         self.get_logger().info(
-            'Published confirmed target '
+            'Published finalized target '
             f'target_id={result.target_id} '
             f'label={result.label} '
             f'confidence={result.confidence:.6f} '

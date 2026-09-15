@@ -33,7 +33,7 @@ class VisionTargetRetryTest(unittest.TestCase):
         self.node.destroy_node()
 
     @staticmethod
-    def confirmed_target():
+    def finalized_target():
         target = ReconTarget()
         target.target_id = 'target_001'
         target.label = '09'
@@ -41,11 +41,11 @@ class VisionTargetRetryTest(unittest.TestCase):
         target.latitude = 22.88290413
         target.longitude = 113.48808515
         target.valid = True
-        target.status = 'confirmed'
+        target.status = 'finalized'
         return target
 
     def test_retries_while_manager_remains_standby(self):
-        self.node.target_callback(self.confirmed_target())
+        self.node.target_callback(self.finalized_target())
         self.assertEqual(1, self.node.target_publish_attempts)
 
         self.node.target_published_monotonic = time.monotonic() - 1.0
@@ -55,7 +55,7 @@ class VisionTargetRetryTest(unittest.TestCase):
         self.assertEqual('waiting_for_manager_ack', self.node.automation_phase)
 
     def test_stops_retrying_after_manager_accepts_target(self):
-        self.node.target_callback(self.confirmed_target())
+        self.node.target_callback(self.finalized_target())
         state = String()
         state.data = 'EXECUTING'
         self.node.mission_state_callback(state)

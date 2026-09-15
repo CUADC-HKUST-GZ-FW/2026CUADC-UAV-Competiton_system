@@ -154,6 +154,19 @@ def make_manager_ready(manager):
             raise RuntimeError('mission manager could not enter STANDBY')
 
 
+def refresh_manager_health(manager):
+    now = time.monotonic()
+    with manager._lock:
+        manager.last_fcu_state_time = now
+        manager.last_heartbeat_time = now
+        manager.last_vehicle_info_time = now
+        manager.last_position_time = now
+        manager.last_gps_time = now
+        manager.last_ekf_time = now
+        manager.last_sensor_time = now
+        manager.last_mission_waypoints_time = now
+
+
 def make_fcu_ready(fcu):
     if not fcu.dry_run_goto or fcu.allow_mission_upload:
         raise RuntimeError('integration test requires dry-run with uploads disabled')
@@ -202,10 +215,10 @@ def main():
             '-p', 'calibration_valid:=true',
             '-p', 'calibration_width:=1440',
             '-p', 'calibration_height:=1080',
-            '-p', 'fx:=1828.0308235733144',
-            '-p', 'fy:=1827.57772607314',
-            '-p', 'cx:=769.3836267628353',
-            '-p', 'cy:=543.4421171826395',
+            '-p', 'fx:=1824.3503',
+            '-p', 'fy:=1834.1137',
+            '-p', 'cx:=758.9870',
+            '-p', 'cy:=532.5906',
             '-p', 'camera_forward_tilt_deg:=20.0',
             '-p', 'camera_offset_flu_m:=[0.418,0.0,-0.09]',
             '-p', 'insert_wp_index:=5',
@@ -213,7 +226,7 @@ def main():
             '-p', 'd_offset_m:=50.0',
             '-p', 'ground_altitude_mode:=fixed_msl',
             '-p', 'fixed_ground_altitude_msl_m:=0.0',
-            '-p', 'minimum_observations:=5',
+            '-p', 'packet_min_observations:=11',
             '-p', 'minimum_observation_span_sec:=0.20',
             '-p', 'max_horizontal_radius_95_m:=6.0',
         ])
@@ -251,7 +264,8 @@ def main():
             if bridge.mission_state != 'STANDBY':
                 raise RuntimeError('bridge did not receive the latched STANDBY state')
 
-            for sequence in range(7):
+            for sequence in range(12):
+                refresh_manager_health(manager)
                 capture_ns = source.publish_telemetry()
                 spin_for(executor, 0.05)
                 manifest = {
@@ -268,7 +282,7 @@ def main():
                         'rank': 0,
                         'detection_index': 0,
                         'src': 'crop_00.jpg',
-                        'center': [769.3836267628353, 543.4421171826395],
+                        'center': [758.9870, 532.5906],
                         'class_id': 85,
                         'class_label': '85',
                         'class_prob': 0.99,
@@ -278,9 +292,17 @@ def main():
                 manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
                 spin_for(executor, 0.08)
 
+            # Real MAVROS telemetry continues after the target leaves frame.
+            # Supply the same trailing sample so the final manifest can be
+            # interpolated and the 0.20 s packet timeout can elapse.
+            refresh_manager_health(manager)
+            source.publish_telemetry()
+            spin_for(executor, 0.30)
+
             deadline = time.monotonic() + 4.0
             dry_run_event = None
             while time.monotonic() < deadline:
+                refresh_manager_health(manager)
                 executor.spin_once(timeout_sec=0.05)
                 dry_run_event = next(
                     (
@@ -293,9 +315,13 @@ def main():
                 if dry_run_event is not None:
                     break
 
-            confirmed = [result for result in probe.recon_results if result.valid]
-            if not confirmed:
-                raise RuntimeError('geolocator produced no confirmed ReconTarget')
+            finalized = [
+                result
+                for result in probe.recon_results
+                if result.valid and result.status == 'finalized'
+            ]
+            if not finalized:
+                raise RuntimeError('geolocator produced no finalized ReconTarget')
             if len(probe.target_commands) != 1:
                 raise RuntimeError(
                     f'expected one TargetCommand, got {len(probe.target_commands)}'
@@ -303,7 +329,7 @@ def main():
             if dry_run_event is None:
                 raise RuntimeError('FCU dry-run route planning event was not produced')
 
-            recon_result = confirmed[0]
+            recon_result = finalized[0]
             command = probe.target_commands[0]
             if abs(command.latitude - recon_result.latitude) > 1.0e-10:
                 raise RuntimeError('latitude changed while crossing the bridge')
@@ -336,14 +362,14 @@ def main():
                     'real_mavros_write_attempted': False,
                 },
                 'vision_manifest': {
-                    'frames_injected': 7,
+                    'frames_injected': 12,
                     'label': '85',
                     'pose_score': 0.98,
                     'class_prob': 0.99,
-                    'pixel_center': [769.3836267628353, 543.4421171826395],
+                    'pixel_center': [758.9870, 532.5906],
                 },
                 'recon_geolocator': {
-                    'confirmed_count': len(confirmed),
+                    'finalized_count': len(finalized),
                     'target_id': recon_result.target_id,
                     'status': recon_result.status,
                     'observation_count': recon_result.observation_count,

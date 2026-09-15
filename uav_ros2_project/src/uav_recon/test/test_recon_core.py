@@ -2,7 +2,9 @@ import math
 
 from uav_recon.core import (
     CameraModel,
+    FramePacket,
     Observation,
+    PixelFramePacketManager,
     TimedBuffer,
     Track,
     geodetic_delta_m,
@@ -12,6 +14,7 @@ from uav_recon.core import (
     lerp_tuple,
     project_pixel_to_ground,
     propagate_geodetic_with_local_delta,
+    resolve_packet_candidates,
 )
 
 
@@ -185,3 +188,181 @@ def test_track_fusion_prefers_center_observation():
     fused = track.fuse(0.10)
     _, north = geodetic_delta_m(22.0, 113.0, fused['latitude'], fused['longitude'])
     assert 0.10 < north < 0.35
+
+
+def packet_observation(
+    timestamp,
+    frame_number,
+    center_px,
+    east_m=0.0,
+    label='85',
+):
+    latitude = 22.0
+    longitude = 113.0 + east_m / (
+        6378137.0 * math.cos(math.radians(latitude)) * math.pi / 180.0
+    )
+    return Observation(
+        timestamp=timestamp,
+        latitude=latitude,
+        longitude=longitude,
+        altitude_msl_m=4.0,
+        label=label,
+        class_id=int(label) if label.isdigit() else 1,
+        confidence=0.98,
+        pose_score=0.95,
+        frame_path='frame.jpg',
+        crop_path='crop.jpg',
+        frame_number=frame_number,
+        source_sequence=frame_number,
+        center_px=center_px,
+    )
+
+
+def fused_packet(packet_id, frame_count, east_m):
+    packet = FramePacket(packet_id, '85')
+    for index in range(frame_count):
+        packet.add(packet_observation(
+            timestamp=index / 60.0,
+            frame_number=index,
+            center_px=(720.0 + index, 540.0),
+            east_m=east_m,
+        ))
+    return packet.fuse(0.10)
+
+
+def test_pixel_packet_manager_uses_dynamic_gate_and_020_second_timeout():
+    manager = PixelFramePacketManager(
+        gap_timeout_sec=0.20,
+        pixel_gate_base_px=25.0,
+        pixel_gate_rate_px_per_sec=1300.0,
+        pixel_gate_max_px=200.0,
+    )
+    first = manager.add(packet_observation(1.0, 1, (100.0, 100.0)))
+    same = manager.add(packet_observation(1.05, 2, (185.0, 100.0)))
+    assert same is first
+    assert manager.pixel_gate(0.05) == 90.0
+
+    split = manager.add(packet_observation(1.10, 3, (390.0, 100.0)))
+    assert split is not first
+    assert manager.active_packet_count == 2
+    assert manager.advance(1.30) == []
+
+    groups = manager.advance(1.300001)
+    assert len(groups) == 1
+    assert groups[0].label == '85'
+    assert [len(packet.observations) for packet in groups[0].packets] == [2, 1]
+
+
+def test_pixel_packet_manager_does_not_count_two_same_frame_detections_together():
+    manager = PixelFramePacketManager()
+    left = manager.add(packet_observation(1.0, 10, (100.0, 100.0)))
+    right = manager.add(packet_observation(1.0, 10, (110.0, 100.0)))
+    assert left is not right
+    assert manager.active_packet_count == 2
+
+
+def test_pixel_packet_manager_keeps_label_flicker_in_same_track():
+    manager = PixelFramePacketManager()
+    first = manager.add(packet_observation(1.0, 1, (100.0, 100.0), label='85'))
+    second = manager.add(packet_observation(1.02, 2, (112.0, 101.0), label='50'))
+    assert second is first
+    assert [item.label for item in first.observations] == ['85', '50']
+
+
+def test_pixel_packet_manager_forces_group_close_at_frame_limit():
+    manager = PixelFramePacketManager(max_observations=3)
+    for index in range(3):
+        manager.add(packet_observation(
+            1.0 + index * 0.01,
+            index,
+            (100.0 + index, 100.0),
+        ))
+
+    groups = manager.take_limit_reached_group()
+    assert len(groups) == 1
+    assert groups[0].closure_reason == 'max_observations'
+    assert len(groups[0].packets) == 1
+    assert len(groups[0].packets[0].observations) == 3
+    assert manager.active_packet_count == 0
+    assert manager.pending_packet_count == 0
+
+    replacement = manager.add(packet_observation(1.04, 4, (104.0, 100.0)))
+    assert len(replacement.observations) == 1
+
+
+def test_frame_packet_uses_valid_frame_count_majority_for_label():
+    packet = FramePacket('packet_0001', '85')
+    labels = ['85'] * 7 + ['50'] * 4
+    for index, label in enumerate(labels):
+        packet.add(packet_observation(
+            timestamp=index / 60.0,
+            frame_number=index,
+            center_px=(720.0 + index, 540.0),
+            label=label,
+        ))
+    fused = packet.fuse(0.10)
+    assert fused['label'] == '85'
+    assert fused['class_id'] == 85
+    assert fused['label_counts'] == {'85': 7, '50': 4}
+    assert abs(fused['label_consensus'] - 7.0 / 11.0) < 1e-9
+
+
+def test_packet_candidates_merge_with_frame_count_weight_inside_15m():
+    stronger = fused_packet('packet_0001', 20, 0.0)
+    weaker = fused_packet('packet_0002', 10, 1.2)
+    winners, decisions = resolve_packet_candidates([weaker, stronger], 1.5, 10.0)
+    assert len(winners) == 1
+    assert winners[0]['observation_count'] == 30
+    east, _ = geodetic_delta_m(
+        22.0, 113.0, winners[0]['latitude'], winners[0]['longitude']
+    )
+    assert abs(east - 0.4) < 0.01
+    assert decisions[-1]['action'] == 'merge'
+
+
+def test_packet_candidates_discard_smaller_between_15m_and_10m():
+    stronger = fused_packet('packet_0001', 20, 0.0)
+    weaker = fused_packet('packet_0002', 12, 4.0)
+    winners, decisions = resolve_packet_candidates([weaker, stronger], 1.5, 10.0)
+    assert len(winners) == 1
+    assert winners[0]['packet_ids'] == ['packet_0001']
+    assert decisions[-1]['action'] == 'discard_smaller_packet'
+
+
+def test_packet_candidates_keep_coordinates_at_least_10m_apart():
+    first = fused_packet('packet_0001', 20, 0.0)
+    second = fused_packet('packet_0002', 12, 10.1)
+    winners, _ = resolve_packet_candidates([second, first], 1.5, 10.0)
+    assert len(winners) == 2
+
+
+def test_merged_packet_candidates_revote_all_frame_labels():
+    left = FramePacket('packet_0001', '10')
+    right = FramePacket('packet_0002', '30')
+    for index, label in enumerate(['10'] * 6 + ['20'] * 5):
+        left.add(packet_observation(
+            timestamp=index / 60.0,
+            frame_number=index,
+            center_px=(700.0 + index, 540.0),
+            east_m=0.0,
+            label=label,
+        ))
+    for index, label in enumerate(['30'] * 6 + ['20'] * 5):
+        right.add(packet_observation(
+            timestamp=1.0 + index / 60.0,
+            frame_number=100 + index,
+            center_px=(900.0 + index, 540.0),
+            east_m=1.0,
+            label=label,
+        ))
+
+    winners, decisions = resolve_packet_candidates(
+        [left.fuse(0.10), right.fuse(0.10)],
+        1.5,
+        10.0,
+    )
+    assert len(winners) == 1
+    assert winners[0]['label'] == '20'
+    assert winners[0]['class_id'] == 20
+    assert winners[0]['label_counts'] == {'10': 6, '20': 10, '30': 6}
+    assert decisions[-1]['action'] == 'merge'

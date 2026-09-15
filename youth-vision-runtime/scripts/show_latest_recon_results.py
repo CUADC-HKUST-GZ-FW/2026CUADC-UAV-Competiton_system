@@ -114,7 +114,7 @@ def is_hidden_label(label):
 
 
 def is_confirmed(record):
-    return record['valid'] and record['status'] == 'confirmed'
+    return record['valid'] and record['status'] in {'confirmed', 'finalized'}
 
 
 def cluster_records(records, radius_m):
@@ -175,7 +175,7 @@ def summarize_group(group):
         label_members,
         key=lambda record: (
             record['valid'],
-            record['status'] == 'confirmed',
+            record['status'] in {'confirmed', 'finalized'},
             record['observation_count'],
             record['confidence'],
         ),
@@ -201,7 +201,13 @@ def summarize_group(group):
         'cluster_spread_m': spread,
         'horizontal_radius_95_m': max(record['horizontal_radius_95_m'] for record in group),
         'observation_count': sum(record['observation_count'] for record in group),
-        'status': 'confirmed' if any(record['status'] == 'confirmed' for record in group) else representative['status'],
+        'status': (
+            'finalized'
+            if any(record['status'] == 'finalized' for record in group)
+            else 'confirmed'
+            if any(record['status'] == 'confirmed' for record in group)
+            else representative['status']
+        ),
         'valid': any(record['valid'] for record in group),
         'rtk_fixed': all(record['rtk_fixed'] for record in group),
         'gps_fix_type': min(record['gps_fix_type'] for record in group),
@@ -253,6 +259,7 @@ def format_timestamp(value):
 
 def status_text(status):
     names = {
+        'finalized': '已定稿',
         'confirmed': '已确认',
         'collecting_observations': '采集中',
         'tracking': '跟踪中',

@@ -43,6 +43,7 @@ class CompetitionSelector(Node):
         self.required_targets = args.required_targets
         self.dedup_radius_m = args.dedup_radius_m
         self.settle_sec = args.settle_sec
+        self.allow_confirmed = args.allow_confirmed
         self.output_path = self.session_root / 'competition_selected.json'
         self.selection = None
         self.message = None
@@ -65,6 +66,8 @@ class CompetitionSelector(Node):
             f'mode={self.mode} session={self.session_root} '
             f'required_nonempty_targets={self.required_targets} '
             f'dedup_radius_m={self.dedup_radius_m:.2f} '
+            f'accepted_statuses='
+            f'{"finalized,confirmed" if self.allow_confirmed else "finalized"} '
             'flight_command_output=disabled'
         )
 
@@ -93,7 +96,7 @@ class CompetitionSelector(Node):
         message.observation_count = selected['observation_count']
         message.rtk_fixed = selected['rtk_fixed']
         message.valid = True
-        message.status = 'confirmed'
+        message.status = 'finalized'
         return message
 
     @staticmethod
@@ -184,6 +187,7 @@ class CompetitionSelector(Node):
             self.mode,
             self.required_targets,
             self.dedup_radius_m,
+            self.allow_confirmed,
         )
         signature = tuple(
             sorted((item['target_id'], item['label']) for item in representatives)
@@ -192,7 +196,7 @@ class CompetitionSelector(Node):
             self.last_signature = signature
             self.signature_since = time.monotonic()
             self.get_logger().info(
-                f'Competition candidates confirmed={len(representatives)}/'
+                f'Competition eligible candidates={len(representatives)}/'
                 f'{self.required_targets} ids={signature}'
             )
         if decision is None:
@@ -209,7 +213,12 @@ def parse_args():
     parser.add_argument('--session-root', type=Path, required=True)
     parser.add_argument('--required-targets', type=int, default=3)
     parser.add_argument('--dedup-radius-m', type=float, default=3.0)
-    parser.add_argument('--settle-sec', type=float, default=3.0)
+    parser.add_argument('--settle-sec', type=float, default=1.0)
+    parser.add_argument(
+        '--allow-confirmed',
+        action='store_true',
+        help='Allow legacy confirmed records; intended only for static mode.',
+    )
     parser.add_argument('--poll-period-sec', type=float, default=0.25)
     return parser.parse_args()
 
