@@ -157,6 +157,10 @@ def make_manager_ready(manager):
 def make_fcu_ready(fcu):
     if not fcu.dry_run_goto or fcu.allow_mission_upload:
         raise RuntimeError('integration test requires dry-run with uploads disabled')
+    if fcu.insert_wp_index != 5 or fcu.resume_wp_index != 10:
+        raise RuntimeError('integration test mission splice parameters are stale')
+    if abs(fcu.d_offset_m - 50.0) > 1.0e-9:
+        raise RuntimeError('integration test D-point offset is stale')
     state = State()
     state.connected = True
     state.armed = True
@@ -169,7 +173,6 @@ def make_fcu_ready(fcu):
     gps.longitude = AIRCRAFT_LON
     gps.altitude = AIRCRAFT_ALT_MSL_M
     fcu.current_gps = gps
-    fcu.resume_wp_index = 10
 
 
 def spin_for(executor, duration_sec):
@@ -205,6 +208,9 @@ def main():
             '-p', 'cy:=543.4421171826395',
             '-p', 'camera_forward_tilt_deg:=20.0',
             '-p', 'camera_offset_flu_m:=[0.418,0.0,-0.09]',
+            '-p', 'insert_wp_index:=5',
+            '-p', 'resume_wp_index:=10',
+            '-p', 'd_offset_m:=50.0',
             '-p', 'ground_altitude_mode:=fixed_msl',
             '-p', 'fixed_ground_altitude_msl_m:=0.0',
             '-p', 'minimum_observations:=5',
