@@ -144,6 +144,12 @@ def make_manager_ready(manager):
         manager.ekf_healthy = True
         manager.last_sensor_time = now
         manager.sensor_health = True
+        # Mirror a real MAVROS WaypointList received before the aircraft reaches
+        # the insertion boundary. Production rejects targets when this sequence
+        # is unknown or is already at/after insert_wp_index.
+        manager.current_mission_seq = 0
+        manager.current_mission_count = 12
+        manager.last_mission_waypoints_time = now
         if not manager.transition_to(MissionState.STANDBY, 'isolated_mock_ready'):
             raise RuntimeError('mission manager could not enter STANDBY')
 
@@ -163,6 +169,7 @@ def make_fcu_ready(fcu):
     gps.longitude = AIRCRAFT_LON
     gps.altitude = AIRCRAFT_ALT_MSL_M
     fcu.current_gps = gps
+    fcu.resume_wp_index = 10
 
 
 def spin_for(executor, duration_sec):
