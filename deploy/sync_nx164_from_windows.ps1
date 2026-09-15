@@ -90,7 +90,7 @@ git log -1 --oneline --decorate
 '@
 
     Write-Host "[INFO] Updating and building NX164..."
-    $remoteScript | & ssh "${JetsonUser}@${JetsonHost}" "bash -s"
+    $remoteScript | & ssh "${JetsonUser}@${JetsonHost}" "tr -d '\r' | bash -s"
     if ($LASTEXITCODE -ne 0) {
         throw "NX164 deployment failed with exit code $LASTEXITCODE"
     }
