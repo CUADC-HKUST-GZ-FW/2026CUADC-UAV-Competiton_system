@@ -142,8 +142,6 @@ def generate_launch_description():
             name: common[name]
             for name in COMMON_FCU_ARGUMENT_DEFAULTS
         },
-        'target_system_id': target_system_id,
-        'target_component_id': target_component_id,
     }
 
     # ========================================================================

@@ -178,8 +178,6 @@ def generate_launch_description():
 
         # REAL-only FCU parameters.
         'service_availability_timeout_sec': real_only['service_availability_timeout_sec'],
-        'target_system_id': target_system_id,
-        'target_component_id': target_component_id,
         'mission_service_retry_count': real_only['mission_service_retry_count'],
         'mission_service_retry_delay_sec': real_only['mission_service_retry_delay_sec'],
         'clear_mission_before_full_push': real_only['clear_mission_before_full_push'],

@@ -268,11 +268,16 @@ class FlightSummaryLoggerNode(Node):
                     stream.write('\n')
 
     _ABURCD_EVENTS = {
+        'second_full_verify_start', 'second_full_verify_pass',
+        'second_full_pull_failed', 'dynamic_update_skipped',
+        'dynamic_update_too_late', 'dynamic_mission_structure_mismatch',
+        'mission_progress_recovery', 'mission_progress_unknown',
+        'mission_state_unknown', 'dynamic_mission_failed',
         'mission_current_a', 'a_reached', 'b_crossed', 'b_state_frozen',
-        'r_calc_start', 'r_calc_done', 'r_calc_failed', 'r_push_start',
-        'r_push_ack', 'r_pull_start', 'r_pull_done', 'r_push_failed',
-        'r_push_verified', 'dynamic_update_cancelled',
-        'r_push_verify_failed', 'r_dynamic_out_of_range',
+        'r_calc_start', 'r_calc_done', 'r_calc_failed', 'second_full_push_start',
+        'second_full_push_done', 'second_full_pull_start', 'second_full_pull_done', 'second_full_push_failed',
+        'dynamic_mission_verified', 'dynamic_update_cancelled',
+        'mission_inconsistent', 'r_dynamic_out_of_range',
         'mission_current_u', 'u_reached',
         'mission_current_r', 'r_reached', 'r_update_rejected_late',
         'r_update_rejected_mission_busy',
@@ -286,20 +291,24 @@ class FlightSummaryLoggerNode(Node):
         'snapshot_latency_ms', 'calc_duration_ms', 'push_duration_ms',
         'verify_duration_ms', 'dynamic_update_total_ms',
         'r_commit_margin_sec', 'r_commit_margin_m', 'failure_reason',
-        'partial_push_attempt', 'partial_push_start_ms',
-        'partial_push_ack_ms', 'partial_push_failure_reason',
-        'pull_after_push_start', 'pull_after_push_done',
-        'verify_cpu_duration_ms', 'deadline_current_seq',
-        'deadline_last_reached_seq', 'r_actual_after_failure',
-        'r_restore_attempted', 'r_restore_result',
+        'dynamic_trigger_timestamp', 'r_calc_start', 'r_calc_done',
+        'second_full_push_start', 'second_full_push_done',
+        'second_full_push_duration_ms', 'second_full_pull_start',
+        'second_full_pull_done', 'second_full_pull_duration_ms',
+        'second_full_verify_start', 'second_full_verify_done',
+        'verify_cpu_duration_ms', 'dynamic_full_update_total_ms',
+        'current_seq_before_update', 'current_seq_after_update',
+        'last_reached_seq_before_update', 'last_reached_seq_after_update',
+        'mission_state', 'r_source', 'reason', 'push_pass',
+        'deadline_current_seq', 'deadline_last_reached_seq',
         'dynamic_worker_cancel_reason',
     )
     _ABURCD_HUMAN_FIELDS = (
         'current_seq', 'reached_seq', 'r_seq', 'snapshot_latency_ms',
         'calc_duration_ms', 'push_duration_ms', 'verify_duration_ms',
         'dynamic_update_total_ms', 'r_commit_margin_sec',
-        'r_commit_margin_m', 'failure_reason', 'r_actual_after_failure',
-        'r_restore_result', 'dynamic_worker_cancel_reason',
+        'r_commit_margin_m', 'failure_reason', 'mission_state', 'r_source',
+        'reason', 'dynamic_worker_cancel_reason',
     )
 
     def _format_human_event(self, record):
@@ -406,6 +415,33 @@ class FlightSummaryLoggerNode(Node):
                         f'  planned R lon: {float(lon):.7f}',
                     ])
             return '\n'.join(lines)
+
+        if event == 'dynamic_mission_verified':
+            return (
+                'DYNAMIC R UPDATE\n'
+                f'  trigger: {record.get("dynamic_trigger_timestamp")}\n'
+                f'  R dynamic: lat={record.get("dynamic_r_lat")} '
+                f'lon={record.get("dynamic_r_lon")} alt={record.get("dynamic_r_alt")}\n'
+                'SECOND FULL MISSION UPDATE\n'
+                f'  push: {"PASS" if record.get("push_pass") else "FAILED (reconciled)"} '
+                f'{record.get("second_full_push_duration_ms")} ms\n'
+                f'  pull: PASS {record.get("second_full_pull_duration_ms")} ms\n'
+                f'  verify: PASS {record.get("verify_cpu_duration_ms")} ms\n'
+                'MISSION PROGRESS\n'
+                f'  before: seq{record.get("current_seq_before_update")}\n'
+                f'  after: seq{record.get("current_seq_after_update")}\n'
+                'DYNAMIC R\n  result: VERIFIED\n'
+                f'  total: {record.get("dynamic_full_update_total_ms")} ms\n'
+                '  source: DYNAMIC'
+            )
+        if event in {'dynamic_update_skipped', 'dynamic_update_too_late'}:
+            return ('DYNAMIC R\n  result: SKIPPED\n'
+                    f'  reason: {record.get("reason", record.get("failure_reason"))}\n'
+                    '  source: R_SAFE')
+        if event == 'dynamic_mission_failed':
+            return ('DYNAMIC R\n  result: FAILED\n'
+                    f'  mission_state: {record.get("mission_state")}\n'
+                    f'  reason: {record.get("reason")}')
 
         if event in self._ABURCD_EVENTS:
             lines = [f'[{timestamp}] ABURCD  {event.upper()}']
@@ -541,7 +577,7 @@ class FlightSummaryLoggerNode(Node):
                 + '\n\nABURCD UPDATE SUMMARY\n'
                 + 'Result: '
                 + str(metric.get('result', 'NOT OBSERVED'))
-                + '\nTotal B_CROSSED -> R_PUSH_VERIFIED: '
+                + '\nTotal B_CROSSED -> DYNAMIC_MISSION_VERIFIED: '
                 + self._metric_text(
                     metric.get('dynamic_update_total_ms'), ' ms'
                 )
@@ -801,7 +837,7 @@ class FlightSummaryLoggerNode(Node):
                     except (KeyError, TypeError, ValueError):
                         self.r_point = None
 
-        if name == 'r_push_verified':
+        if name == 'dynamic_mission_verified':
             try:
                 self.r_point = {
                     'lat': float(event['dynamic_r_lat']),
@@ -812,25 +848,25 @@ class FlightSummaryLoggerNode(Node):
 
         if name in self._ABURCD_EVENTS:
             for key in (
-                'snapshot_latency_ms', 'calc_duration_ms', 'push_duration_ms',
-                'verify_duration_ms', 'dynamic_update_total_ms',
-                'r_commit_margin_sec', 'r_commit_margin_m', 'failure_reason',
+                *self._ABURCD_METRIC_FIELDS,
             ):
                 if event.get(key) is not None:
                     self._aburcd_metrics[key] = event[key]
-            if name == 'r_push_verified':
+            if name == 'dynamic_mission_verified':
                 self._aburcd_metrics['result'] = 'DYNAMIC_R'
             elif name in {
                 'r_calc_failed', 'r_dynamic_out_of_range',
-                'r_push_verify_failed',
+                'dynamic_update_skipped',
             }:
                 self._aburcd_metrics['result'] = 'R_SAFE_FALLBACK'
             elif name in {
-                'r_push_failed', 'r_update_rejected_mission_busy'
+                'second_full_push_failed', 'r_update_rejected_mission_busy',
+                'mission_inconsistent', 'mission_state_unknown',
+                'mission_progress_unknown', 'dynamic_mission_failed'
             }:
                 self._aburcd_metrics['result'] = 'UPDATE_FAILED'
             elif name in {
-                'r_update_rejected_late',
+                'r_update_rejected_late', 'dynamic_update_too_late',
                 'error_r_active_before_update_verified',
             }:
                 self._aburcd_metrics['result'] = 'UPDATE_TOO_LATE'

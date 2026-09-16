@@ -56,6 +56,9 @@ def make_node_without_ros():
     node.composite_route_points = None
     node.dynamic_indices = {}
     node.composite_expected_waypoints = None
+    node._safe_composite_mission = None
+    node._second_full_push_attempted = False
+    node.service_timeout_sec = 0.1
     node.composite_safe_r_waypoint = None
     node.current_waypoints = None
     node.current_gps = None
@@ -70,7 +73,6 @@ def make_node_without_ros():
         'vfr_timestamp_monotonic': None,
     }
     node._last_mission_current_seq = None
-    node._raw_mission_current_seq = None
     node._b_previous_signed_m = None
     node._b_crossing_triggered = False
     node._dynamic_update_started = False
@@ -116,6 +118,7 @@ def prepare_dynamic_update_node():
     node.composite_expected_waypoints = [
         node.clone_waypoint(wp) for wp in mission
     ]
+    node._safe_composite_mission = tuple(node.clone_waypoint(wp) for wp in mission)
     node.current_waypoints = SimpleNamespace(
         current_seq=node.composite_seq_u, waypoints=mission,
     )
@@ -452,6 +455,10 @@ def test_composite_upload_requires_auto_without_changing_mode():
     assert modes == []
     assert current_calls == [2]
     assert node.composite_final_seq == node.composite_seq_d
+    assert node.verify_temporary_mission(pushed, node.safe_composite_mission)[0]
+    external = node.safe_composite_mission
+    external[7].x_lat += 1.0
+    assert node.safe_composite_mission[7].x_lat == pushed[7].x_lat
     assert node.composite_final_seq < len(pushed) - 1
     assert 'AUTO remained confirmed without an automatic mode change' in message
 
@@ -587,55 +594,6 @@ def test_virtual_b_crossing_triggers_once_only_while_u_is_current():
     assert snapshots[0]['ground_speed_mps'] == 21.0
 
 
-def test_dynamic_r_update_uses_one_waypoint_and_pullback_verification():
-    node = make_node_without_ros()
-    node.mission_type = 'COMPOSITE'
-    node.get_logger = lambda: NullLogger()
-    points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
-    original = [
-        node.make_nav_waypoint(22.8800 + index * 0.001, 113.4900, 35.0, 15.0)
-        for index in range(14)
-    ]
-    mission, _ = node.build_composite_mission(points, original, 5, 9)
-    node.composite_route_points = points
-    node.composite_expected_waypoints = [
-        node.clone_waypoint(wp) for wp in mission
-    ]
-    node.current_waypoints = SimpleNamespace(
-        current_seq=node.composite_seq_u, waypoints=mission,
-    )
-    node.dynamic_r_enabled = True
-    node.dynamic_r_test_mode = True
-    events = []
-    node.publish_mission_summary_event = (
-        lambda event, **fields: events.append((event, fields))
-    )
-    partial_calls = []
-
-    async def partial(start_index, waypoint, **_kwargs):
-        partial_calls.append((start_index, node.clone_waypoint(waypoint)))
-
-    async def pull(**_kwargs):
-        updated = [node.clone_waypoint(wp) for wp in mission]
-        updated[partial_calls[0][0]] = node.clone_waypoint(partial_calls[0][1])
-        return SimpleNamespace(
-            current_seq=node.composite_seq_u,
-            waypoints=updated,
-        )
-
-    node.push_partial_mission_async = partial
-    node.pull_mission_async = pull
-    candidate = node.compute_dynamic_r({'ground_speed_mps': 20.0}, points['C'])
-    snapshot = {'timestamp_monotonic': time.monotonic(), 'current_seq': 6}
-    asyncio.run(node._update_dynamic_r_async(candidate, snapshot, 0.1))
-
-    assert len(partial_calls) == 1
-    assert partial_calls[0][0] == node.composite_seq_r
-    assert node._dynamic_update_result == 'DYNAMIC_R'
-    assert node._dynamic_update_verified
-    assert 'r_push_verified' in [name for name, _ in events]
-
-
 def _commit_verified_for_test(node, points, mission):
     candidate = node.compute_dynamic_r({'ground_speed_mps': 20.0}, points['C'])
     expected = [node.clone_waypoint(wp) for wp in mission]
@@ -676,7 +634,7 @@ def test_dynamic_r_case_a_verified_commit_precedes_current_r():
     assert not callback.is_alive()
 
     names = [name for name, _ in events]
-    assert names.index('r_push_verified') < names.index('mission_current_r')
+    assert names.index('dynamic_mission_verified') < names.index('mission_current_r')
     assert 'error_r_active_before_update_verified' not in names
     assert node._dynamic_update_result == 'DYNAMIC_R'
 
@@ -718,7 +676,7 @@ def test_dynamic_r_case_b_callback_latches_too_late_before_worker_commit():
     assert names.index('mission_current_r') < names.index(
         'error_r_active_before_update_verified'
     )
-    assert 'r_push_verified' not in names
+    assert 'dynamic_mission_verified' not in names
     assert worker_result == [False]
     assert not node._dynamic_update_verified
     assert node._dynamic_update_result == 'UPDATE_TOO_LATE'
@@ -735,99 +693,28 @@ def test_last_reached_r_is_deadline_even_when_current_seq_stays_u():
     assert not node._dynamic_update_verified
     assert node._dynamic_update_result == 'UPDATE_TOO_LATE'
     assert node._dynamic_update_state == 'TOO_LATE'
-    assert 'r_push_verified' not in [name for name, _ in events]
+    assert 'dynamic_mission_verified' not in [name for name, _ in events]
 
 
-def test_raw_mission_current_r_is_deadline_when_waypoint_list_stays_u():
-    node, points, mission, events = prepare_dynamic_update_node()
-    node._dynamic_update_started = True
-    raw_current = SimpleNamespace(
-        get_type=lambda: 'MISSION_CURRENT',
-        seq=node.composite_seq_r,
-    )
-
-    node._raw_mavlink_message_callback(raw_current)
-    committed = _commit_verified_for_test(node, points, mission)
-
-    assert node.current_waypoints.current_seq == node.composite_seq_u
-    assert not committed
-    assert node._dynamic_update_result == 'UPDATE_TOO_LATE'
-    names = [name for name, _ in events]
-    assert names.index('mission_current_r') < names.index(
-        'error_r_active_before_update_verified'
-    )
-    assert 'r_push_verified' not in names
-
-
-@pytest.mark.parametrize(
-    'actual_kind', ['R_ACTUAL_SAFE', 'R_ACTUAL_DYNAMIC']
-)
-def test_push_failure_reconciliation_identifies_actual_r(actual_kind):
-    node, points, mission, events = prepare_dynamic_update_node()
-    candidate = node.compute_dynamic_r(
-        {'ground_speed_mps': 20.0}, points['C']
-    )
-    dynamic_r = node.make_nav_waypoint(
-        candidate['lat'], candidate['lon'], candidate['alt'],
-        node.c_acceptance_radius_m,
-    )
-    observed = [node.clone_waypoint(wp) for wp in mission]
-    if actual_kind == 'R_ACTUAL_DYNAMIC':
-        observed[node.composite_seq_r] = node.clone_waypoint(dynamic_r)
-
-    pull_calls = 0
-
-    async def pull(_started):
-        nonlocal pull_calls
-        pull_calls += 1
-        waypoints = observed if pull_calls == 1 else mission
-        return SimpleNamespace(
-            current_seq=node.composite_seq_u,
-            waypoints=[node.clone_waypoint(wp) for wp in waypoints],
-        )
-
-    restore_calls = []
-
-    async def push(seq, waypoint, **_kwargs):
-        restore_calls.append((seq, node.clone_waypoint(waypoint)))
-
-    node._pull_dynamic_mission_async = pull
-    node.push_partial_mission_async = push
-    asyncio.run(node._handle_dynamic_update_failure_async(
-        candidate,
-        time.monotonic(),
-        'injected partial push failure',
-    ))
-
-    failed = [fields for name, fields in events if name == 'r_push_failed'][-1]
-    assert failed['r_actual_after_failure'] == actual_kind
-    if actual_kind == 'R_ACTUAL_DYNAMIC':
-        assert len(restore_calls) == 1
-        assert failed['r_restore_result'] == 'R_SAFE_RESTORED'
-    else:
-        assert restore_calls == []
-        assert failed['r_restore_result'] == 'NOT_ATTEMPTED'
-
-
-def test_d_reached_cancellation_prevents_worker_partial_push():
+def test_d_reached_cancellation_prevents_worker_full_push():
     node, _points, _mission, events = prepare_dynamic_update_node()
     node._dynamic_update_started = True
     node._cancel_dynamic_update('d_reached')
-    partial_calls = []
+    push_calls = []
 
     async def push(*_args, **_kwargs):
-        partial_calls.append(True)
+        push_calls.append(True)
 
-    node.push_partial_mission_async = push
+    node.push_mission_async = push
     node._dynamic_r_worker({
         'timestamp_monotonic': time.monotonic(),
         'current_seq': node.composite_seq_u,
     })
 
-    assert partial_calls == []
+    assert push_calls == []
     assert node._dynamic_update_cancelled
     assert node._dynamic_worker_cancel_reason == 'd_reached'
-    assert 'r_push_verified' not in [name for name, _ in events]
+    assert 'dynamic_mission_verified' not in [name for name, _ in events]
 
 
 def test_u_reached_uses_live_telemetry_not_frozen_b_snapshot():
@@ -866,7 +753,7 @@ def test_dynamic_r_update_rejects_late_without_push():
         lambda event, **fields: events.append(event)
     )
     calls = []
-    node.push_partial_mission_async = lambda *_args: calls.append(True)
+    node.push_mission_async = lambda *_args: calls.append(True)
     candidate = {
         'valid': True, 'lat': 22.0, 'lon': 113.0, 'alt': 35.0,
     }
@@ -878,86 +765,13 @@ def test_dynamic_r_update_rejects_late_without_push():
     assert node._dynamic_update_result == 'UPDATE_TOO_LATE'
 
 
-def test_dynamic_r_push_failure_keeps_safe_mission_cache():
-    node, points, mission, events = prepare_dynamic_update_node()
-
-    async def failing_push(_seq, _waypoint, **_kwargs):
-        raise RuntimeError('injected partial push failure')
-
-    node.push_partial_mission_async = failing_push
-    snapshot = {'timestamp_monotonic': time.monotonic(), 'current_seq': 6}
-    node._dynamic_r_worker(snapshot)
-
-    assert node._dynamic_update_result == 'UPDATE_FAILED'
-    assert node.composite_expected_waypoints[node.composite_seq_r].x_lat == (
-        mission[node.composite_seq_r].x_lat
-    )
-    assert any(
-        name == 'r_push_failed' and 'injected' in fields['failure_reason']
-        for name, fields in events
-    )
-
-
-def test_dynamic_r_verify_failure_performs_one_safe_r_restore():
-    node, points, mission, events = prepare_dynamic_update_node()
-    partial_calls = []
-    pull_count = 0
-
-    async def partial(seq, waypoint, **_kwargs):
-        partial_calls.append((seq, node.clone_waypoint(waypoint)))
-
-    async def pull(**_kwargs):
-        nonlocal pull_count
-        pull_count += 1
-        if pull_count == 1:
-            corrupt = [node.clone_waypoint(wp) for wp in mission]
-            corrupt[node.composite_seq_d].x_lat += 0.01
-            return SimpleNamespace(
-                current_seq=node.composite_seq_u, waypoints=corrupt,
-            )
-        if pull_count == 2:
-            dynamic = [node.clone_waypoint(wp) for wp in mission]
-            dynamic[node.composite_seq_r] = node.clone_waypoint(
-                partial_calls[0][1]
-            )
-            return SimpleNamespace(
-                current_seq=node.composite_seq_u, waypoints=dynamic,
-            )
-        restored = [node.clone_waypoint(wp) for wp in mission]
-        return SimpleNamespace(
-            current_seq=node.composite_seq_u, waypoints=restored,
-        )
-
-    node.push_partial_mission_async = partial
-    node.pull_mission_async = pull
-    candidate = node.compute_dynamic_r({'ground_speed_mps': 20.0}, points['C'])
-    asyncio.run(node._update_dynamic_r_async(
-        candidate, {'timestamp_monotonic': time.monotonic()}, 0.1
-    ))
-
-    assert len(partial_calls) == 2
-    assert partial_calls[1][0] == node.composite_seq_r
-    assert partial_calls[1][1].x_lat == mission[node.composite_seq_r].x_lat
-    assert node._dynamic_update_result == 'R_SAFE_FALLBACK'
-    failed = [fields for name, fields in events if name == 'r_push_failed'][-1]
-    assert failed['r_actual_after_failure'] == 'R_ACTUAL_DYNAMIC'
-    assert failed['r_restore_result'] == 'R_SAFE_RESTORED'
-
-
-def test_dynamic_r_timeout_stops_before_partial_push():
+def test_dynamic_r_timeout_stops_before_full_push():
     node, points, _mission, events = prepare_dynamic_update_node()
     node.dynamic_r_update_timeout_sec = 0.001
-    original_compute = node.compute_dynamic_r
-
-    def slow_compute(snapshot, target):
-        time.sleep(0.005)
-        return original_compute(snapshot, target)
-
-    node.compute_dynamic_r = slow_compute
     calls = []
-    node.push_partial_mission_async = lambda *_args: calls.append(True)
+    node.push_mission_async = lambda *_args: calls.append(True)
     node._dynamic_r_worker({
-        'timestamp_monotonic': time.monotonic(), 'current_seq': 6,
+        'timestamp_monotonic': time.monotonic() - 1.0, 'current_seq': 6,
     })
 
     assert calls == []

@@ -437,6 +437,10 @@ class MissionManagerNode(Node):
             self.composite_mission_complete_callback,
             10,
         )
+        self.create_subscription(
+            String, '/fcu/mission_summary_event',
+            self.dynamic_mission_failure_callback, 10,
+        )
         for topic in (
             self.required_external_health_topics
             + self.optional_external_health_topics
@@ -997,6 +1001,10 @@ class MissionManagerNode(Node):
             if self.optional_fcu_sensor_warning:
                 warnings.append('optional_sensor_health_bad')
 
+        self.create_subscription(
+            String, '/fcu/mission_summary_event',
+            self.dynamic_mission_failure_callback, 10,
+        )
         for topic in (
             self.required_external_health_topics
             + self.optional_external_health_topics
@@ -1447,6 +1455,20 @@ class MissionManagerNode(Node):
                 return
             self.transition_to(MissionState.MISSION_COMPLETE, reason)
             self.transition_to(MissionState.STANDBY, 'mission_authority_reset')
+
+    def dynamic_mission_failure_callback(self, msg):
+        """Route a verified FCU update fault into the existing SAFE policy."""
+        try:
+            event = json.loads(msg.data)
+        except (TypeError, ValueError):
+            return
+        if not isinstance(event, dict) or event.get('event') != 'dynamic_mission_failed':
+            return
+        with self._lock:
+            if (self.state != MissionState.EXECUTING or not self.active_target
+                    or event.get('task_id') != self.active_target['id']):
+                return
+            self.fail(event.get('reason', 'dynamic_mission_state_unknown'))
 
     def fail(self, reason):
         self.enter_safe(f'task_control_failure:{reason}')
