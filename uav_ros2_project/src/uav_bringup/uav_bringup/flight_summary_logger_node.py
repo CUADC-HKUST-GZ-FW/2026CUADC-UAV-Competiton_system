@@ -38,6 +38,7 @@ class FlightSummaryLoggerNode(Node):
         self.declare_parameter('c_distance_log_period_s', 2.0)
         self.declare_parameter('c_distance_improvement_step_m', 1.0)
         self.declare_parameter('aburcd_update_metrics_enabled', True)
+        self.declare_parameter('dynamic_r_enabled', True)
 
         self.enabled = bool(self.get_parameter('enabled').value)
         self.summary_path = self._resolve_summary_path(
@@ -53,6 +54,9 @@ class FlightSummaryLoggerNode(Node):
         )
         self.aburcd_update_metrics_enabled = bool(
             self.get_parameter('aburcd_update_metrics_enabled').value
+        )
+        self.dynamic_r_enabled = bool(
+            self.get_parameter('dynamic_r_enabled').value
         )
 
         self._lock = threading.Lock()
@@ -370,6 +374,24 @@ class FlightSummaryLoggerNode(Node):
                 f'  verified: {"YES" if record.get("verified") else "NO"}'
             )
 
+        if event in {
+            'mission_current_a', 'mission_current_u', 'mission_current_r',
+            'a_reached', 'u_reached',
+        }:
+            return f'[{timestamp}] ABURCD  {event.upper()}'
+
+        if event == 'r_reached':
+            lines = [f'[{timestamp}] ABURCD  R_REACHED']
+            if isinstance(self.r_point, dict):
+                lat = self.r_point.get('lat')
+                lon = self.r_point.get('lon')
+                if lat is not None and lon is not None:
+                    lines.extend([
+                        f'  planned R lat: {float(lat):.7f}',
+                        f'  planned R lon: {float(lon):.7f}',
+                    ])
+            return '\n'.join(lines)
+
         if event in self._ABURCD_EVENTS:
             lines = [f'[{timestamp}] ABURCD  {event.upper()}']
             for key in self._ABURCD_METRIC_FIELDS:
@@ -436,56 +458,44 @@ class FlightSummaryLoggerNode(Node):
                 f'  minimum distance: {distance_text}'
             )
 
-        if event in {'servo_command_reached', 'payload_release_confirmed'}:
-            title = (
-                'SERVO COMMAND REACHED'
-                if event == 'servo_command_reached'
-                else 'RELEASE CONFIRMED'
-            )
-            lines = [f'[{timestamp}] PAYLOAD  {title}']
+        if event == 'servo_command_reached':
+            lines = [f'[{timestamp}] PAYLOAD  SERVO COMMAND REACHED']
             seq = record.get('release_command_seq', record.get('seq'))
             if seq is not None:
                 lines.append(f'  seq: {seq}')
-            if record.get('observed_pwm') is not None:
-                lines.append(f'  PWM: {record.get("observed_pwm")}')
-
-            gps = record.get('gps')
-            if isinstance(gps, dict):
-                if gps.get('latitude') is not None and gps.get('longitude') is not None:
-                    lines.extend([
-                        f'  aircraft lat: {float(gps["latitude"]):.7f}',
-                        f'  aircraft lon: {float(gps["longitude"]):.7f}',
-                    ])
-
-            r_point = record.get('r_point')
-            if isinstance(r_point, dict):
-                if r_point.get('lat') is not None and r_point.get('lon') is not None:
-                    lines.extend([
-                        f'  R lat: {float(r_point["lat"]):.7f}',
-                        f'  R lon: {float(r_point["lon"]):.7f}',
-                    ])
-
-            distance_to_r_m = record.get('distance_to_r_m')
-            if isinstance(distance_to_r_m, (int, float)) and math.isfinite(
-                float(distance_to_r_m)
-            ):
-                lines.append(f'  distance to R: {float(distance_to_r_m):.2f} m')
-            else:
-                lines.append('  distance to R: unknown')
-
             return '\n'.join(lines)
 
-        if event == 'r_reached':
-            lines = [f'[{timestamp}] ATTACK   R reached (seq {record.get("seq")})']
+        if event == 'payload_release_confirmed':
+            lines = [f'[{timestamp}] PAYLOAD  RELEASE CONFIRMED']
+            gps = record.get('gps')
+            latitude = None
+            longitude = None
+            if isinstance(gps, dict):
+                latitude = gps.get('latitude')
+                longitude = gps.get('longitude')
+            lines.extend([
+                '  actual release lat: '
+                + (
+                    f'{float(latitude):.7f}'
+                    if isinstance(latitude, (int, float)) else 'unknown'
+                ),
+                '  actual release lon: '
+                + (
+                    f'{float(longitude):.7f}'
+                    if isinstance(longitude, (int, float)) else 'unknown'
+                ),
+            ])
             for key, label, suffix in (
                 ('relative_altitude_m', 'relative altitude', ' m'),
                 ('groundspeed_mps', 'groundspeed', ' m/s'),
                 ('airspeed_mps', 'airspeed', ' m/s'),
-                ('heading_deg', 'heading', ' deg'),
+                ('distance_to_r_m', 'distance to R', ' m'),
             ):
-                value = record.get(key)
-                if isinstance(value, (int, float)):
-                    lines.append(f'  {label}: {float(value):.2f}{suffix}')
+                lines.append(
+                    f'  {label}: {self._format_number(record.get(key), suffix)}'
+                )
+            pwm = record.get('observed_pwm', record.get('expected_pwm'))
+            lines.append(f'  PWM: {pwm if pwm is not None else "unknown"}')
             return '\n'.join(lines)
 
         if event == 'd_reached':
@@ -510,18 +520,14 @@ class FlightSummaryLoggerNode(Node):
                 f'  C min distance: '
                 f'{self._format_number(record.get("c_min_distance_m"), " m")}'
             )
+            if not getattr(self, 'dynamic_r_enabled', False):
+                return base
             metric = self._aburcd_metrics
             return (
                 base
                 + '\n\nABURCD UPDATE SUMMARY\n'
-                + 'B snapshot latency: '
-                + self._metric_text(metric.get('snapshot_latency_ms'), ' ms')
-                + '\nDynamic R calculation: '
-                + self._metric_text(metric.get('calc_duration_ms'), ' ms')
-                + '\nPartial mission update: '
-                + self._metric_text(metric.get('push_duration_ms'), ' ms')
-                + '\nMission verification: '
-                + self._metric_text(metric.get('verify_duration_ms'), ' ms')
+                + 'Result: '
+                + str(metric.get('result', 'NOT OBSERVED'))
                 + '\nTotal B_CROSSED -> R_PUSH_VERIFIED: '
                 + self._metric_text(
                     metric.get('dynamic_update_total_ms'), ' ms'
@@ -530,7 +536,6 @@ class FlightSummaryLoggerNode(Node):
                 + self._metric_text(metric.get('r_commit_margin_sec'), ' s')
                 + '\nR commit distance margin: '
                 + self._metric_text(metric.get('r_commit_margin_m'), ' m')
-                + f'\nResult: {metric.get("result", "NOT OBSERVED")}'
             )
 
         if event == 'fcu_connection_changed':
@@ -1000,6 +1005,9 @@ class FlightSummaryLoggerNode(Node):
                 values.get('observed_pwm')
             ),
             gps=gps,
+            relative_altitude_m=self.last_relative_alt_m,
+            groundspeed_mps=self._vfr_field('groundspeed'),
+            airspeed_mps=self._vfr_field('airspeed'),
             r_point=dict(self.r_point) if self.r_point is not None else None,
             distance_to_r_m=self._distance_from_gps_to_r(gps),
         )

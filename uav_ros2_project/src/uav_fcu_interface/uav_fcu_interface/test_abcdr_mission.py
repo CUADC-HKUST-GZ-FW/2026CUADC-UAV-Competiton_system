@@ -15,12 +15,13 @@ from uav_fcu_interface.fcu_interface_mavros_node import FcuInterfaceMavrosNode
 def make_node_without_ros():
     node = FcuInterfaceMavrosNode.__new__(FcuInterfaceMavrosNode)
     node.a_offset_m = 160.0
-    node.b_offset_m = 95.0
-    node.u_offset_m = 75.0
+    node.b_offset_m = 110.0
+    node.u_offset_m = 80.0
     node.release_offset_m = 56.0
     node.d_offset_m = 160.0
     node.a_acceptance_radius_m = 30.0
     node.b_acceptance_radius_m = 15.0
+    node.u_acceptance_radius_m = 15.0
     node.c_acceptance_radius_m = 8.0
     node.d_acceptance_radius_m = 30.0
     node.mission_altitude_m = 35.0
@@ -63,12 +64,13 @@ def make_node_without_ros():
     node._b_previous_signed_m = None
     node._b_crossing_triggered = False
     node._dynamic_update_started = False
+    node._dynamic_update_verified = False
     node._dynamic_update_verified_monotonic = None
     node._dynamic_update_verified_gps = None
     node._dynamic_update_result = 'NOT_OBSERVED'
     node._r_active_before_verify_reported = False
-    node.dynamic_r_enabled = False
-    node.dynamic_r_test_mode = False
+    node.dynamic_r_enabled = True
+    node.dynamic_r_test_mode = True
     node.dynamic_r_test_offset_m = 50.0
     node.dynamic_r_update_timeout_sec = 6.0
     node.aburcd_update_metrics_enabled = True
@@ -130,8 +132,8 @@ def test_abcdr_distances_and_order(heading_deg):
     assert points['C'] == {'lat': 22.8848, 'lon': 113.4956}
     expected_distances = {
         'A': 160.0,
-        'B': 95.0,
-        'U': 75.0,
+        'B': 110.0,
+        'U': 80.0,
         'R': 56.0,
         'D': 160.0,
     }
@@ -148,19 +150,19 @@ def test_abcdr_distances_and_order(heading_deg):
         points['A']['lon'],
         points['B']['lat'],
         points['B']['lon'],
-    ) == pytest.approx(65.0, abs=0.05)
+    ) == pytest.approx(50.0, abs=0.05)
     assert node.distance_m(
         points['B']['lat'],
         points['B']['lon'],
         points['U']['lat'],
         points['U']['lon'],
-    ) == pytest.approx(20.0, abs=0.05)
+    ) == pytest.approx(30.0, abs=0.05)
     assert node.distance_m(
         points['B']['lat'],
         points['B']['lon'],
         points['R']['lat'],
         points['R']['lon'],
-    ) == pytest.approx(39.0, abs=0.05)
+    ) == pytest.approx(54.0, abs=0.05)
     assert math.isfinite(points['D']['lat']) and math.isfinite(points['D']['lon'])
 
 
@@ -212,7 +214,10 @@ def test_b_approach_requires_multiple_forward_samples_and_ignores_old_anomaly():
         gps, points['A'], points['B'], 90.0
     )
     assert passed, reason
-    assert metrics['sample_count'] == 3
+    # A-B is now 50 m while the observation window is 60 m, so the older
+    # anomaly is counted as relevant but still excluded from the last-3
+    # decision samples.
+    assert metrics['sample_count'] == 4
     assert metrics['forward_progress_m'] > 1.0
     assert abs(metrics['heading_error_deg']) < 1.0
     assert metrics['cross_track_m'] < 1.0
@@ -465,6 +470,7 @@ def test_composite_aurd_layout_keeps_b_and_c_virtual():
     ]
     assert mission[5].x_lat == points['A']['lat']
     assert mission[6].x_lat == points['U']['lat']
+    assert mission[6].param2 == pytest.approx(node.u_acceptance_radius_m)
     assert mission[7].x_lat == points['R']['lat']
     assert mission[9].x_lat == points['D']['lat']
     assert mission[10].x_lat == original[9].x_lat
@@ -480,6 +486,7 @@ def test_dynamic_r_requires_explicit_test_mode_and_stays_between_u_and_c():
     snapshot = {'ground_speed_mps': 20.0, 'altitude_m': 35.0}
 
     node.dynamic_r_enabled = True
+    node.dynamic_r_test_mode = False
     candidate = node.compute_dynamic_r(snapshot, points['C'])
     assert not candidate['valid']
     assert candidate['reason'] == 'production_dynamic_r_formula_not_configured'
@@ -610,7 +617,96 @@ def test_dynamic_r_update_uses_one_waypoint_and_pullback_verification():
     assert len(partial_calls) == 1
     assert partial_calls[0][0] == node.composite_seq_r
     assert node._dynamic_update_result == 'DYNAMIC_R'
+    assert node._dynamic_update_verified
     assert 'r_push_verified' in [name for name, _ in events]
+
+
+def _commit_verified_for_test(node, points, mission):
+    candidate = node.compute_dynamic_r({'ground_speed_mps': 20.0}, points['C'])
+    expected = [node.clone_waypoint(wp) for wp in mission]
+    expected[node.composite_seq_r] = node.make_nav_waypoint(
+        candidate['lat'], candidate['lon'], candidate['alt'],
+        node.c_acceptance_radius_m,
+    )
+    return node._commit_dynamic_r_verified(
+        candidate=candidate,
+        expected=expected,
+        started=time.monotonic(),
+        calc_duration_ms=1.0,
+        push_duration_ms=2.0,
+        verify_duration_ms=3.0,
+        verification_reason='verified',
+    )
+
+
+def test_dynamic_r_case_a_verified_commit_precedes_current_r():
+    node, points, mission, events = prepare_dynamic_update_node()
+    node._dynamic_update_started = True
+
+    worker = threading.Thread(
+        target=lambda: _commit_verified_for_test(node, points, mission)
+    )
+    worker.start()
+    worker.join(timeout=1.0)
+    assert not worker.is_alive()
+
+    callback = threading.Thread(
+        target=lambda: node.waypoints_callback(SimpleNamespace(
+            current_seq=node.composite_seq_r,
+            waypoints=mission,
+        ))
+    )
+    callback.start()
+    callback.join(timeout=1.0)
+    assert not callback.is_alive()
+
+    names = [name for name, _ in events]
+    assert names.index('r_push_verified') < names.index('mission_current_r')
+    assert 'error_r_active_before_update_verified' not in names
+    assert node._dynamic_update_result == 'DYNAMIC_R'
+
+
+def test_dynamic_r_case_b_callback_latches_too_late_before_worker_commit():
+    node, points, mission, events = prepare_dynamic_update_node()
+    node._dynamic_update_started = True
+    callback_latched = threading.Event()
+    original_publish = node.publish_mission_summary_event
+
+    def publish(event, **fields):
+        original_publish(event, **fields)
+        if event == 'error_r_active_before_update_verified':
+            callback_latched.set()
+
+    node.publish_mission_summary_event = publish
+    callback = threading.Thread(
+        target=lambda: node.waypoints_callback(SimpleNamespace(
+            current_seq=node.composite_seq_r,
+            waypoints=mission,
+        ))
+    )
+    callback.start()
+    assert callback_latched.wait(timeout=1.0)
+
+    worker_result = []
+    worker = threading.Thread(
+        target=lambda: worker_result.append(
+            _commit_verified_for_test(node, points, mission)
+        )
+    )
+    worker.start()
+    callback.join(timeout=1.0)
+    worker.join(timeout=1.0)
+    assert not callback.is_alive()
+    assert not worker.is_alive()
+
+    names = [name for name, _ in events]
+    assert names.index('mission_current_r') < names.index(
+        'error_r_active_before_update_verified'
+    )
+    assert 'r_push_verified' not in names
+    assert worker_result == [False]
+    assert not node._dynamic_update_verified
+    assert node._dynamic_update_result == 'UPDATE_TOO_LATE'
 
 
 def test_dynamic_r_update_rejects_late_without_push():

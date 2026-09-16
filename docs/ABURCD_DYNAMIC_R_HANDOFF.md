@@ -233,9 +233,11 @@ snapshot_latency_ms
 默认参数：
 
 ```text
-dynamic_r_enabled=false
-dynamic_r_test_mode=false
+dynamic_r_enabled=true
+dynamic_r_test_mode=true
 ```
+
+这是当前 SITL 验证阶段的 TEST ONLY 默认配置，不代表正式动态 R 公式已经实现。
 
 三种行为：
 
@@ -378,7 +380,8 @@ R_PUSH_VERIFIED → MISSION_CURRENT_R
 - 尚未验证 R 时，commit margin 为 `null`；
 - 禁用释放命令时，`release_seq=null`。
 
-没有观察到的事件在最终摘要中写 `NOT OBSERVED`，不能写 0。
+仅在 dynamic R 启用时输出简化的成功/失败摘要；禁用时不输出
+`ABURCD UPDATE SUMMARY ... NOT OBSERVED`。
 
 ## 11. 当前临时距离与风险
 
@@ -386,20 +389,21 @@ R_PUSH_VERIFIED → MISSION_CURRENT_R
 
 ```text
 a_offset_m = 160
-b_offset_m = 95
-u_offset_m = 75       # TEMPORARY TEST VALUE
+b_offset_m = 110
+u_offset_m = 80       # TEMPORARY TEST VALUE
 release_offset_m = 56
 d_offset_m = 50
+u_acceptance_radius_m = 15
 ```
 
 因此：
 
 ```text
-BU 中心点距离 = 20 m
-UR 中心点距离 = 19 m
+BU 中心点距离 = 30 m
+UR 中心点距离 = 24 m
 ```
 
-巡航速度约 23 m/s 时，飞完 20 m 不到 1 秒。当前 U 使用的接受半径为 15 m，
+巡航速度约 23 m/s 时，飞完 30 m 约 1.3 秒。U 现在使用独立的 15 m 接受半径，
 ArduPlane 还可能提前切换 `MISSION_CURRENT_R`，所以真实可用更新时间可能比 1 秒更短。
 
 这组参数只能用于测量和暴露 `UPDATE_TOO_LATE`，不能当作实飞安全距离。
@@ -499,24 +503,26 @@ uav_ros2_project/test_data/vision_result/target_001/result.json
 
 ## 14. SITL 动态 R 启动参数
 
-SITL 必须显式打开两层开关：
+当前公共默认值已经打开两层开关；下面的显式参数便于启动时复核：
 
 ```bash
 ros2 launch uav_bringup sitl_mavros_dynamic_abc.launch.py \
   dynamic_r_enabled:=true \
   dynamic_r_test_mode:=true \
-  u_offset_m:=75.0 \
+  u_offset_m:=80.0 \
+  u_acceptance_radius_m:=15.0 \
   dynamic_r_test_offset_m:=50.0
 ```
 
-不要把 `dynamic_r_test_mode=true` 写成实机默认值。
+当前 `dynamic_r_test_mode=true` 只用于验证阶段。正式实飞前必须显式关闭，
+直到生产动态 R 公式完成评审。
 
 启动后先确认日志打印：
 
 ```text
 dynamic_r_enabled=true
 dynamic_r_test_mode=true
-u_offset_m=75.0
+u_offset_m=80.0
 dynamic_r_update_timeout_sec=6.0
 ```
 
@@ -577,7 +583,7 @@ MissionManager 已离开 WAIT_FCU
 5. 重新确定 BU 和 UR；
 6. 考虑 U 接受半径造成的提前切换；
 7. 验证 NX 与飞控之间真实链路延迟；
-8. 确认实机启动参数中 `dynamic_r_test_mode=false`。
+8. 正式实飞时显式设置并确认 `dynamic_r_test_mode=false`（当前公共默认值为 true）。
 
 本阶段没有处理：
 
@@ -600,4 +606,3 @@ MissionManager 已离开 WAIT_FCU
 6. 重复测试并统计更新时间；
 7. 再讨论 BU/UR 距离；
 8. 最后才接入正式动态 R 公式。
-

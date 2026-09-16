@@ -248,6 +248,7 @@ def generate_launch_description():
             'aburcd_update_metrics_enabled': common[
                 'aburcd_update_metrics_enabled'
             ],
+            'dynamic_r_enabled': common['dynamic_r_enabled'],
         }],
     )
 
