@@ -22,7 +22,7 @@ from mavros_msgs.srv import (
     WaypointPull,
     WaypointSetCurrent,
 )
-from std_msgs.msg import String
+from std_msgs.msg import Float64, String
 
 from uav_interfaces.srv import GoToGlobal
 
@@ -47,6 +47,8 @@ class FcuInterfaceMavrosNode(Node):
         self.current_gps = None
         self.current_raw_gps = None
         self.current_vfr_hud = None
+        self.current_rel_alt_m = None
+        self.current_rel_alt_timestamp_monotonic = None
         self.current_waypoints = None
         self._waypoint_list_generation = 0
 
@@ -82,6 +84,8 @@ class FcuInterfaceMavrosNode(Node):
         self._dynamic_update_verified_gps = None
         self._dynamic_update_result = 'NOT_OBSERVED'
         self._r_active_before_verify_reported = False
+        self._dynamic_prediction_commit = None
+        self._dynamic_prediction_shadow = None
         self._dynamic_state_lock = threading.Lock()
         self.composite_ab_check_result = None
         # Composite A-B trajectory checker state:
@@ -97,8 +101,10 @@ class FcuInterfaceMavrosNode(Node):
         self.live_vehicle_state = {
             'gps': None,
             'vfr_hud': None,
+            'rel_alt_m': None,
             'gps_timestamp_monotonic': None,
             'vfr_timestamp_monotonic': None,
+            'rel_alt_timestamp_monotonic': None,
         }
 
         # General
@@ -153,11 +159,23 @@ class FcuInterfaceMavrosNode(Node):
         # Composite target-segment altitude.
         self.declare_parameter('mission_altitude_m', 15.0)
 
-        # The current default intentionally exercises the TEST ONLY dynamic-R
-        # path. There is still no production release-point formula here.
+        # Dynamic-R release point. TEST mode retains the old fixed-offset path;
+        # normal mode uses the AB multi-sample predictor below.
         self.declare_parameter('dynamic_r_enabled', True)
-        self.declare_parameter('dynamic_r_test_mode', True)
+        self.declare_parameter('dynamic_r_test_mode', False)
         self.declare_parameter('dynamic_r_test_offset_m', 50.0)
+        self.declare_parameter('dynamic_r_prediction_window_sec', 1.2)
+        self.declare_parameter('dynamic_r_min_prediction_samples', 5)
+        self.declare_parameter('dynamic_r_min_prediction_span_sec', 0.4)
+        self.declare_parameter('dynamic_r_vz_fit_max_rmse_mps', 0.8)
+        self.declare_parameter('dynamic_r_max_abs_vertical_accel_mps2', 3.0)
+        self.declare_parameter('dynamic_r_min_rc_m', 20.0)
+        self.declare_parameter('dynamic_r_min_u_r_distance_m', 5.0)
+        self.declare_parameter('dynamic_r_max_iterations', 4)
+        self.declare_parameter('dynamic_r_convergence_m', 0.5)
+        # Reserved for later release-mechanism calibration. Keep 0.0 now.
+        self.declare_parameter('dynamic_r_release_delay_sec', 0.0)
+        self.declare_parameter('dynamic_r_prediction_shadow_mode', False)
         # Software deadline for the second full update, in addition to R active/
         # reached. In-flight services may finish; read-only reconciliation is
         # still required after an error, but no late success or retry is allowed.
@@ -269,6 +287,48 @@ class FcuInterfaceMavrosNode(Node):
         self.dynamic_r_test_offset_m = float(
             self.get_parameter('dynamic_r_test_offset_m').value
         )
+        self.dynamic_r_prediction_window_sec = max(
+            0.2,
+            float(self.get_parameter('dynamic_r_prediction_window_sec').value),
+        )
+        self.dynamic_r_min_prediction_samples = max(
+            3, int(self.get_parameter('dynamic_r_min_prediction_samples').value)
+        )
+        self.dynamic_r_min_prediction_span_sec = max(
+            0.1,
+            float(self.get_parameter('dynamic_r_min_prediction_span_sec').value),
+        )
+        self.dynamic_r_vz_fit_max_rmse_mps = max(
+            0.0,
+            float(self.get_parameter('dynamic_r_vz_fit_max_rmse_mps').value),
+        )
+        self.dynamic_r_max_abs_vertical_accel_mps2 = max(
+            0.0,
+            float(
+                self.get_parameter(
+                    'dynamic_r_max_abs_vertical_accel_mps2'
+                ).value
+            ),
+        )
+        self.dynamic_r_min_rc_m = max(
+            0.0, float(self.get_parameter('dynamic_r_min_rc_m').value)
+        )
+        self.dynamic_r_min_u_r_distance_m = max(
+            0.0,
+            float(self.get_parameter('dynamic_r_min_u_r_distance_m').value),
+        )
+        self.dynamic_r_max_iterations = max(
+            1, int(self.get_parameter('dynamic_r_max_iterations').value)
+        )
+        self.dynamic_r_convergence_m = max(
+            0.01, float(self.get_parameter('dynamic_r_convergence_m').value)
+        )
+        self.dynamic_r_release_delay_sec = max(
+            0.0, float(self.get_parameter('dynamic_r_release_delay_sec').value)
+        )
+        self.dynamic_r_prediction_shadow_mode = bool(
+            self.get_parameter('dynamic_r_prediction_shadow_mode').value
+        )
         self.dynamic_r_update_timeout_sec = max(
             0.1,
             float(self.get_parameter('dynamic_r_update_timeout_sec').value),
@@ -284,7 +344,11 @@ class FcuInterfaceMavrosNode(Node):
                 'ABURCD offsets must satisfy '
                 'a_offset_m > b_offset_m > u_offset_m > release_offset_m > 0'
             )
-        history_size = max(20, self.b_check_required_samples * 6)
+        history_size = max(
+            60,
+            self.b_check_required_samples * 6,
+            self.dynamic_r_min_prediction_samples * 8,
+        )
         self.gps_history = deque(maxlen=history_size)
 
         sensor_qos = QoSProfile(
@@ -314,6 +378,14 @@ class FcuInterfaceMavrosNode(Node):
             VfrHud,
             '/mavros/vfr_hud',
             self.vfr_hud_callback,
+            sensor_qos,
+            callback_group=self.callback_group,
+        )
+
+        self.create_subscription(
+            Float64,
+            '/mavros/global_position/rel_alt',
+            self.rel_alt_callback,
             sensor_qos,
             callback_group=self.callback_group,
         )
@@ -436,6 +508,14 @@ class FcuInterfaceMavrosNode(Node):
             'dynamic_r_update_timeout_sec='
             f'{self.dynamic_r_update_timeout_sec:.3f} '
             f'dynamic_r_test_mode={self._bool(self.dynamic_r_test_mode)} '
+            'dynamic_r_prediction_window_sec='
+            f'{self.dynamic_r_prediction_window_sec:.2f} '
+            'dynamic_r_min_prediction_samples='
+            f'{self.dynamic_r_min_prediction_samples} '
+            'dynamic_r_release_delay_sec='
+            f'{self.dynamic_r_release_delay_sec:.3f} '
+            'dynamic_r_prediction_shadow_mode='
+            f'{self._bool(self.dynamic_r_prediction_shadow_mode)} '
             'aburcd_update_metrics_enabled='
             f'{self._bool(self.aburcd_update_metrics_enabled)}'
         )
@@ -491,6 +571,17 @@ class FcuInterfaceMavrosNode(Node):
                 'heading_deg': float(msg.heading),
             }
             self.live_vehicle_state['vfr_timestamp_monotonic'] = time.monotonic()
+
+    def rel_alt_callback(self, msg):
+        value = float(msg.data)
+        if not math.isfinite(value):
+            return
+        now = time.monotonic()
+        self.current_rel_alt_m = value
+        self.current_rel_alt_timestamp_monotonic = now
+        with self._live_state_lock:
+            self.live_vehicle_state['rel_alt_m'] = value
+            self.live_vehicle_state['rel_alt_timestamp_monotonic'] = now
 
     def _update_live_gps(self, msg):
         with self._live_state_lock:
@@ -731,6 +822,9 @@ class FcuInterfaceMavrosNode(Node):
             'lat': None,
             'lon': None,
             'altitude_m': None,
+            'relative_altitude_m': None,
+            'relative_altitude_age_sec': None,
+            'height_source': None,
             'ground_speed_mps': None,
             'vertical_speed_mps': None,
             'heading_deg': None,
@@ -738,6 +832,14 @@ class FcuInterfaceMavrosNode(Node):
             'distance_to_r_m': None,
         }
         live_vfr = None
+        live_rel_alt_m = None
+        live_rel_alt_timestamp = None
+        if hasattr(self, 'live_vehicle_state'):
+            with self._live_state_lock:
+                live_rel_alt_m = self.live_vehicle_state.get('rel_alt_m')
+                live_rel_alt_timestamp = self.live_vehicle_state.get(
+                    'rel_alt_timestamp_monotonic'
+                )
         if gps is None and hasattr(self, 'live_vehicle_state'):
             with self._live_state_lock:
                 live_gps = self.live_vehicle_state.get('gps')
@@ -754,6 +856,13 @@ class FcuInterfaceMavrosNode(Node):
                 'lon': float(gps.longitude),
                 'altitude_m': float(gps.altitude),
             })
+        if live_rel_alt_m is not None and math.isfinite(float(live_rel_alt_m)):
+            fields['relative_altitude_m'] = float(live_rel_alt_m)
+            fields['height_source'] = 'rel_alt'
+            if live_rel_alt_timestamp is not None:
+                fields['relative_altitude_age_sec'] = max(
+                    0.0, time.monotonic() - float(live_rel_alt_timestamp)
+                )
         if fields['lat'] is not None and self.composite_route_points is not None:
             fields['distance_to_u_m'] = self.distance_m(
                 fields['lat'],
@@ -809,6 +918,60 @@ class FcuInterfaceMavrosNode(Node):
             reached_seq=int(reached_seq),
             **fields,
         )
+        if item == 'R':
+            prediction = (
+                self._dynamic_prediction_commit
+                or self._dynamic_prediction_shadow
+            )
+            if prediction:
+                actual_heading = fields.get('heading_deg')
+                actual_ground_speed = fields.get('ground_speed_mps')
+                actual_forward_speed = None
+                if actual_heading is not None and actual_ground_speed is not None:
+                    heading_error_deg = self._signed_heading_error_deg(
+                        actual_heading,
+                        self.composite_route_points['heading_deg'],
+                    )
+                    actual_forward_speed = float(actual_ground_speed) * math.cos(
+                        math.radians(heading_error_deg)
+                    )
+                actual_vz = fields.get('vertical_speed_mps')
+                actual_height = fields.get('relative_altitude_m')
+                predicted_forward = prediction.get('predicted_v_forward_r_mps')
+                predicted_vz = prediction.get('predicted_vz_r_mps')
+                predicted_height = prediction.get('predicted_height_r_m')
+                self._publish_aburcd_event(
+                    'release_state_actual',
+                    current_seq=self._current_mission_seq(),
+                    reached_seq=int(reached_seq),
+                    prediction_source=(
+                        'dynamic_commit'
+                        if self._dynamic_prediction_commit is not None
+                        else 'shadow'
+                    ),
+                    predicted_forward_speed_r_mps=predicted_forward,
+                    actual_forward_speed_r_mps=actual_forward_speed,
+                    forward_speed_prediction_error_mps=(
+                        actual_forward_speed - predicted_forward
+                        if actual_forward_speed is not None
+                        and predicted_forward is not None else None
+                    ),
+                    predicted_vertical_speed_r_mps=predicted_vz,
+                    actual_vertical_speed_r_mps=actual_vz,
+                    vertical_speed_prediction_error_mps=(
+                        float(actual_vz) - float(predicted_vz)
+                        if actual_vz is not None and predicted_vz is not None
+                        else None
+                    ),
+                    predicted_height_r_m=predicted_height,
+                    actual_height_r_m=actual_height,
+                    height_prediction_error_m=(
+                        float(actual_height) - float(predicted_height)
+                        if actual_height is not None and predicted_height is not None
+                        else None
+                    ),
+                    height_source=fields.get('height_source'),
+                )
 
     def _virtual_b_signed_distance_m(self, gps):
         points = self.composite_route_points
@@ -878,10 +1041,18 @@ class FcuInterfaceMavrosNode(Node):
             return
 
         detected = time.monotonic()
+        with self._gps_lock:
+            prediction_samples = [
+                dict(sample)
+                for sample in self.gps_history
+                if detected - float(sample['timestamp_monotonic'])
+                <= self.dynamic_r_prediction_window_sec
+            ]
         snapshot = {
             'timestamp_unix_sec': time.time(),
             'timestamp_monotonic': detected,
             'current_seq': current_seq,
+            'prediction_samples': prediction_samples,
             **self._gps_snapshot_fields(gps),
         }
         snapshot['snapshot_latency_ms'] = (
@@ -1409,7 +1580,39 @@ class FcuInterfaceMavrosNode(Node):
             return
         if not math.isfinite(msg.latitude) or not math.isfinite(msg.longitude):
             return
-        sample = (time.time(), float(msg.latitude), float(msg.longitude))
+        now_monotonic = time.monotonic()
+        now_unix = time.time()
+        with self._live_state_lock:
+            live_vfr = self.live_vehicle_state.get('vfr_hud')
+            vfr_timestamp = self.live_vehicle_state.get('vfr_timestamp_monotonic')
+            rel_alt_m = self.live_vehicle_state.get('rel_alt_m')
+            rel_alt_timestamp = self.live_vehicle_state.get(
+                'rel_alt_timestamp_monotonic'
+            )
+            live_vfr = dict(live_vfr) if live_vfr is not None else None
+        sample = {
+            'timestamp_unix_sec': now_unix,
+            'timestamp_monotonic': now_monotonic,
+            'lat': float(msg.latitude),
+            'lon': float(msg.longitude),
+            'ground_speed_mps': None,
+            'vertical_speed_mps': None,
+            'heading_deg': None,
+            'relative_altitude_m': None,
+        }
+        if (
+            live_vfr is not None
+            and vfr_timestamp is not None
+            and now_monotonic - float(vfr_timestamp) <= self.gps_stale_timeout_sec
+        ):
+            sample.update(live_vfr)
+        if (
+            rel_alt_m is not None
+            and rel_alt_timestamp is not None
+            and now_monotonic - float(rel_alt_timestamp) <= self.gps_stale_timeout_sec
+            and math.isfinite(float(rel_alt_m))
+        ):
+            sample['relative_altitude_m'] = float(rel_alt_m)
         with self._gps_lock:
             self.gps_history.append(sample)
 
@@ -1465,7 +1668,8 @@ class FcuInterfaceMavrosNode(Node):
         )
 
         valid_samples = []
-        for sample_time, latitude, longitude in gps_samples:
+        for sample in gps_samples:
+            sample_time, latitude, longitude = self._gps_history_basic(sample)
             if not math.isfinite(latitude) or not math.isfinite(longitude):
                 continue
             x_m, y_m = self.local_xy_m(
@@ -1580,6 +1784,17 @@ class FcuInterfaceMavrosNode(Node):
         return earth_radius_m * c
 
     @staticmethod
+    def _gps_history_basic(sample):
+        """Return (unix_time, lat, lon) for dict or legacy tuple samples."""
+        if isinstance(sample, dict):
+            return (
+                float(sample['timestamp_unix_sec']),
+                float(sample['lat']),
+                float(sample['lon']),
+            )
+        return float(sample[0]), float(sample[1]), float(sample[2])
+
+    @staticmethod
     def local_xy_m(origin_lat, origin_lon, latitude, longitude):
         earth_radius_m = 6371000.0
         mean_lat = math.radians((origin_lat + latitude) * 0.5)
@@ -1614,7 +1829,7 @@ class FcuInterfaceMavrosNode(Node):
             return None, 'gps_history_empty', metrics
 
         now = time.time()
-        latest_age_sec = now - gps_samples[-1][0]
+        latest_age_sec = now - self._gps_history_basic(gps_samples[-1])[0]
         metrics['gps_age_sec'] = latest_age_sec
         if latest_age_sec > self.gps_stale_timeout_sec:
             return False, 'gps_stale', metrics
@@ -1638,7 +1853,8 @@ class FcuInterfaceMavrosNode(Node):
         if window_end_m <= window_start_m:
             return False, 'b_check_window_invalid', metrics
         relevant = []
-        for sample_time, latitude, longitude in gps_samples:
+        for sample in gps_samples:
+            sample_time, latitude, longitude = self._gps_history_basic(sample)
             x_m, y_m = self.local_xy_m(
                 a_point['lat'], a_point['lon'], latitude, longitude
             )
@@ -1763,11 +1979,376 @@ class FcuInterfaceMavrosNode(Node):
             'reverse_heading_deg': reverse_heading_deg
         }
 
+    @staticmethod
+    def _weighted_mean(values, weights):
+        total_weight = sum(weights)
+        if total_weight <= 0.0:
+            raise ValueError('non_positive_weight_sum')
+        return sum(value * weight for value, weight in zip(values, weights)) / total_weight
+
+    @staticmethod
+    def _weighted_linear_fit_at_zero(times, values, weights):
+        """Return intercept at t=0, slope and weighted RMSE."""
+        if not (len(times) == len(values) == len(weights)) or len(times) < 2:
+            raise ValueError('insufficient_fit_samples')
+        total_weight = sum(weights)
+        if total_weight <= 0.0:
+            raise ValueError('non_positive_weight_sum')
+        mean_t = sum(weight * value for weight, value in zip(weights, times)) / total_weight
+        mean_y = sum(weight * value for weight, value in zip(weights, values)) / total_weight
+        denominator = sum(
+            weight * (value - mean_t) ** 2
+            for weight, value in zip(weights, times)
+        )
+        if denominator <= 1.0e-9:
+            raise ValueError('fit_time_span_too_small')
+        slope = sum(
+            weight * (time_value - mean_t) * (measurement - mean_y)
+            for weight, time_value, measurement in zip(weights, times, values)
+        ) / denominator
+        intercept = mean_y - slope * mean_t
+        rmse = math.sqrt(
+            sum(
+                weight * (
+                    measurement - (intercept + slope * time_value)
+                ) ** 2
+                for weight, time_value, measurement
+                in zip(weights, times, values)
+            ) / total_weight
+        )
+        return intercept, slope, rmse
+
+    @staticmethod
+    def _signed_heading_error_deg(actual_heading_deg, planned_heading_deg):
+        return (
+            (float(actual_heading_deg) - float(planned_heading_deg) + 180.0)
+            % 360.0
+            - 180.0
+        )
+
+    def _dynamic_prediction_inputs(self, b_snapshot):
+        samples = list((b_snapshot or {}).get('prediction_samples') or [])
+        if len(samples) < self.dynamic_r_min_prediction_samples:
+            return None, 'prediction_samples_insufficient'
+        samples.sort(key=lambda sample: float(sample['timestamp_monotonic']))
+        b_time = float(b_snapshot['timestamp_monotonic'])
+        valid = []
+        for sample in samples:
+            timestamp = sample.get('timestamp_monotonic')
+            ground_speed = sample.get('ground_speed_mps')
+            vertical_speed = sample.get('vertical_speed_mps')
+            heading = sample.get('heading_deg')
+            lat = sample.get('lat')
+            lon = sample.get('lon')
+            values = (timestamp, ground_speed, vertical_speed, heading, lat, lon)
+            if any(value is None for value in values):
+                continue
+            if not all(math.isfinite(float(value)) for value in values):
+                continue
+            age = b_time - float(timestamp)
+            if age < -0.05 or age > self.dynamic_r_prediction_window_sec + 0.05:
+                continue
+            valid.append(sample)
+        if len(valid) < self.dynamic_r_min_prediction_samples:
+            return None, 'prediction_motion_samples_insufficient'
+        span_sec = (
+            float(valid[-1]['timestamp_monotonic'])
+            - float(valid[0]['timestamp_monotonic'])
+        )
+        if span_sec < self.dynamic_r_min_prediction_span_sec:
+            return None, 'prediction_sample_span_too_short'
+
+        relative_altitude_m = b_snapshot.get('relative_altitude_m')
+        relative_altitude_age_sec = b_snapshot.get('relative_altitude_age_sec')
+        if (
+            relative_altitude_m is None
+            or not math.isfinite(float(relative_altitude_m))
+            or float(relative_altitude_m) <= 0.0
+        ):
+            return None, 'relative_altitude_missing_or_invalid'
+        if (
+            relative_altitude_age_sec is None
+            or not math.isfinite(float(relative_altitude_age_sec))
+            or float(relative_altitude_age_sec) > self.gps_stale_timeout_sec
+        ):
+            return None, 'relative_altitude_stale'
+
+        attack_heading_deg = float(self.composite_route_points['heading_deg'])
+        a_point = self.composite_route_points['A']
+        c_point = self.composite_route_points['C']
+        line_x, line_y = self.local_xy_m(
+            a_point['lat'], a_point['lon'], c_point['lat'], c_point['lon']
+        )
+        line_length = math.hypot(line_x, line_y)
+        if line_length < 1.0:
+            return None, 'attack_line_too_short'
+        unit_x = line_x / line_length
+        unit_y = line_y / line_length
+
+        weights = [float(index + 1) for index in range(len(valid))]
+        v_forward_values = []
+        vertical_speed_values = []
+        heading_errors = []
+        cross_tracks = []
+        fit_times = []
+        for sample in valid:
+            heading_error_deg = self._signed_heading_error_deg(
+                sample['heading_deg'], attack_heading_deg
+            )
+            v_forward = float(sample['ground_speed_mps']) * math.cos(
+                math.radians(heading_error_deg)
+            )
+            x_m, y_m = self.local_xy_m(
+                a_point['lat'], a_point['lon'],
+                float(sample['lat']), float(sample['lon']),
+            )
+            cross_track_m = abs(x_m * unit_y - y_m * unit_x)
+            v_forward_values.append(v_forward)
+            vertical_speed_values.append(float(sample['vertical_speed_mps']))
+            heading_errors.append(heading_error_deg)
+            cross_tracks.append(cross_track_m)
+            fit_times.append(float(sample['timestamp_monotonic']) - b_time)
+
+        v_forward_est = self._weighted_mean(v_forward_values, weights)
+        if not math.isfinite(v_forward_est) or v_forward_est <= 1.0:
+            return None, 'forward_speed_invalid'
+
+        vertical_speed_mean = self._weighted_mean(vertical_speed_values, weights)
+        try:
+            vz_at_b_fit, az_fit, vz_fit_rmse = self._weighted_linear_fit_at_zero(
+                fit_times, vertical_speed_values, weights
+            )
+        except ValueError:
+            vz_at_b_fit = vertical_speed_mean
+            az_fit = 0.0
+            vz_fit_rmse = float('inf')
+
+        trend_valid = (
+            math.isfinite(vz_at_b_fit)
+            and math.isfinite(az_fit)
+            and math.isfinite(vz_fit_rmse)
+            and vz_fit_rmse <= self.dynamic_r_vz_fit_max_rmse_mps
+            and abs(az_fit) <= self.dynamic_r_max_abs_vertical_accel_mps2
+        )
+        if trend_valid:
+            vz_estimation_mode = 'trend'
+            vz_at_b_est = vz_at_b_fit
+            az_est = az_fit
+        else:
+            vz_estimation_mode = 'weighted_mean'
+            vz_at_b_est = vertical_speed_mean
+            az_est = 0.0
+
+        return {
+            'sample_count': len(valid),
+            'window_sec': span_sec,
+            'height_source': 'rel_alt',
+            'height_b_m': float(relative_altitude_m),
+            'v_forward_mean_mps': v_forward_est,
+            'vz_est_mps': vz_at_b_est,
+            'vz_trend_mps2': az_est,
+            'vz_fit_rmse_mps': vz_fit_rmse,
+            'vz_estimation_mode': vz_estimation_mode,
+            'heading_error_mean_deg': self._weighted_mean(heading_errors, weights),
+            'cross_track_mean_m': self._weighted_mean(cross_tracks, weights),
+        }, 'ok'
+
+    def _compute_predicted_dynamic_r(self, b_snapshot, target_c):
+        prediction, reason = self._dynamic_prediction_inputs(b_snapshot)
+        if prediction is None:
+            return {
+                'valid': False,
+                'lat': None,
+                'lon': None,
+                'alt': None,
+                'reason': reason,
+            }
+
+        rc_min = self.dynamic_r_min_rc_m
+        rc_max = self.u_offset_m - self.dynamic_r_min_u_r_distance_m
+        if rc_max <= rc_min:
+            return {
+                'valid': False,
+                'lat': None,
+                'lon': None,
+                'alt': None,
+                'reason': 'dynamic_rc_bounds_invalid',
+                'prediction': prediction,
+            }
+
+        rc_guess = float(self.release_offset_m)
+        if not rc_min <= rc_guess <= rc_max:
+            return {
+                'valid': False,
+                'lat': None,
+                'lon': None,
+                'alt': None,
+                'reason': 'safe_rc_outside_dynamic_bounds',
+                'prediction': prediction,
+            }
+
+        g_mps2 = 9.80665
+        iterations = []
+        converged = False
+        rc_new = rc_guess
+        final_state = None
+        for iteration in range(1, self.dynamic_r_max_iterations + 1):
+            distance_b_to_r_m = self.b_offset_m - rc_guess
+            if distance_b_to_r_m <= 0.0:
+                return {
+                    'valid': False,
+                    'lat': None,
+                    'lon': None,
+                    'alt': None,
+                    'reason': 'predicted_r_not_after_b',
+                    'prediction': prediction,
+                    'iterations': iterations,
+                }
+            t_br_sec = distance_b_to_r_m / prediction['v_forward_mean_mps']
+            vz_b = prediction['vz_est_mps']
+            az = prediction['vz_trend_mps2']
+            # When the fitted vertical trend is clearly damping climb/descent
+            # toward level flight, do not extrapolate the same acceleration
+            # through zero and invent a climb/descent reversal.  ABURCD uses a
+            # common relative-altitude target, so level-off is the conservative
+            # short-horizon continuation after the fitted zero crossing.
+            zero_crossing_sec = None
+            if vz_b * az < 0.0 and abs(az) > 1.0e-6:
+                candidate_zero_crossing = -vz_b / az
+                if 0.0 < candidate_zero_crossing < t_br_sec:
+                    zero_crossing_sec = candidate_zero_crossing
+            if zero_crossing_sec is not None:
+                predicted_vz_r_mps = 0.0
+                predicted_height_r_m = (
+                    prediction['height_b_m']
+                    + vz_b * zero_crossing_sec
+                    + 0.5 * az * zero_crossing_sec ** 2
+                )
+                vertical_prediction_mode = 'trend_to_level'
+            else:
+                predicted_vz_r_mps = vz_b + az * t_br_sec
+                predicted_height_r_m = (
+                    prediction['height_b_m']
+                    + vz_b * t_br_sec
+                    + 0.5 * az * t_br_sec ** 2
+                )
+                vertical_prediction_mode = prediction['vz_estimation_mode']
+            if (
+                not math.isfinite(predicted_height_r_m)
+                or predicted_height_r_m <= 0.0
+                or not math.isfinite(predicted_vz_r_mps)
+            ):
+                return {
+                    'valid': False,
+                    'lat': None,
+                    'lon': None,
+                    'alt': None,
+                    'reason': 'predicted_release_state_invalid',
+                    'prediction': prediction,
+                    'iterations': iterations,
+                }
+            discriminant = (
+                predicted_vz_r_mps ** 2
+                + 2.0 * g_mps2 * predicted_height_r_m
+            )
+            if not math.isfinite(discriminant) or discriminant <= 0.0:
+                return {
+                    'valid': False,
+                    'lat': None,
+                    'lon': None,
+                    'alt': None,
+                    'reason': 'ballistic_discriminant_invalid',
+                    'prediction': prediction,
+                    'iterations': iterations,
+                }
+            fall_time_sec = (
+                predicted_vz_r_mps + math.sqrt(discriminant)
+            ) / g_mps2
+            if not math.isfinite(fall_time_sec) or fall_time_sec <= 0.0:
+                return {
+                    'valid': False,
+                    'lat': None,
+                    'lon': None,
+                    'alt': None,
+                    'reason': 'fall_time_invalid',
+                    'prediction': prediction,
+                    'iterations': iterations,
+                }
+            rc_new = prediction['v_forward_mean_mps'] * (
+                fall_time_sec + self.dynamic_r_release_delay_sec
+            )
+            delta_rc_m = abs(rc_new - rc_guess)
+            final_state = {
+                'predicted_height_r_m': predicted_height_r_m,
+                'predicted_vz_r_mps': predicted_vz_r_mps,
+                'predicted_v_forward_r_mps': prediction['v_forward_mean_mps'],
+                'fall_time_sec': fall_time_sec,
+                'vertical_prediction_mode': vertical_prediction_mode,
+                'vertical_zero_crossing_sec': zero_crossing_sec,
+            }
+            iterations.append({
+                'iteration': iteration,
+                'rc_guess_m': rc_guess,
+                'distance_b_to_r_m': distance_b_to_r_m,
+                't_br_sec': t_br_sec,
+                **final_state,
+                'rc_new_m': rc_new,
+                'delta_rc_m': delta_rc_m,
+            })
+            if not rc_min <= rc_new <= rc_max:
+                return {
+                    'valid': False,
+                    'lat': None,
+                    'lon': None,
+                    'alt': None,
+                    'reason': 'rc_out_of_range',
+                    'prediction': prediction,
+                    'iterations': iterations,
+                    'rc_dynamic_m': rc_new,
+                }
+            if delta_rc_m <= self.dynamic_r_convergence_m:
+                converged = True
+                break
+            rc_guess = rc_new
+
+        if not converged or final_state is None:
+            return {
+                'valid': False,
+                'lat': None,
+                'lon': None,
+                'alt': None,
+                'reason': 'rc_iteration_not_converged',
+                'prediction': prediction,
+                'iterations': iterations,
+                'rc_dynamic_m': rc_new,
+            }
+
+        lat, lon = self.destination_point(
+            float(target_c['lat']),
+            float(target_c['lon']),
+            self.composite_route_points['reverse_heading_deg'],
+            rc_new,
+        )
+        prediction.update(final_state)
+        prediction.update({
+            'iteration_count': len(iterations),
+            'converged': True,
+            'rc_dynamic_m': rc_new,
+            'release_delay_sec': self.dynamic_r_release_delay_sec,
+        })
+        return {
+            'valid': True,
+            'lat': lat,
+            'lon': lon,
+            'alt': self.mission_altitude_m,
+            'reason': 'ab_multisample_prediction',
+            'prediction': prediction,
+            'iterations': iterations,
+            'rc_dynamic_m': rc_new,
+        }
+
     def compute_dynamic_r(self, b_snapshot, target_c):
         """Return a dynamic-R candidate, separate from callback policy."""
-        # The production release-point physics are intentionally not invented.
-        # Only explicit TEST ONLY mode can generate a changed candidate; normal
-        # real-flight defaults retain R_safe.
         if not self.dynamic_r_enabled:
             return {
                 'valid': False,
@@ -1775,14 +2356,6 @@ class FcuInterfaceMavrosNode(Node):
                 'lon': None,
                 'alt': None,
                 'reason': 'dynamic_r_disabled',
-            }
-        if not self.dynamic_r_test_mode:
-            return {
-                'valid': False,
-                'lat': None,
-                'lon': None,
-                'alt': None,
-                'reason': 'production_dynamic_r_formula_not_configured',
             }
         if not b_snapshot or target_c is None:
             return {
@@ -1792,19 +2365,22 @@ class FcuInterfaceMavrosNode(Node):
                 'alt': None,
                 'reason': 'dynamic_r_input_missing',
             }
-        lat, lon = self.destination_point(
-            float(target_c['lat']),
-            float(target_c['lon']),
-            self.composite_route_points['reverse_heading_deg'],
-            self.dynamic_r_test_offset_m,
-        )
-        return {
-            'valid': True,
-            'lat': lat,
-            'lon': lon,
-            'alt': self.mission_altitude_m,
-            'reason': 'TEST_ONLY_fixed_offset',
-        }
+        if self.dynamic_r_test_mode:
+            lat, lon = self.destination_point(
+                float(target_c['lat']),
+                float(target_c['lon']),
+                self.composite_route_points['reverse_heading_deg'],
+                self.dynamic_r_test_offset_m,
+            )
+            return {
+                'valid': True,
+                'lat': lat,
+                'lon': lon,
+                'alt': self.mission_altitude_m,
+                'reason': 'TEST_ONLY_fixed_offset',
+                'rc_dynamic_m': self.dynamic_r_test_offset_m,
+            }
+        return self._compute_predicted_dynamic_r(b_snapshot, target_c)
 
     def validate_dynamic_r_candidate(self, candidate):
         if not candidate.get('valid'):
@@ -1837,6 +2413,18 @@ class FcuInterfaceMavrosNode(Node):
                 f'along_u_to_c_m={along:.3f}:u_c_length_m={length:.3f}:'
                 f'cross_track_m={cross:.3f}'
             )
+        rc_distance_m = self.distance_m(
+            float(candidate['lat']), float(candidate['lon']),
+            points['C']['lat'], points['C']['lon'],
+        )
+        rc_max_m = self.u_offset_m - self.dynamic_r_min_u_r_distance_m
+        if not self.dynamic_r_min_rc_m <= rc_distance_m <= rc_max_m:
+            return False, (
+                'R_DYNAMIC_OUT_OF_RANGE:'
+                f'rc_distance_m={rc_distance_m:.3f}:'
+                f'rc_min_m={self.dynamic_r_min_rc_m:.3f}:'
+                f'rc_max_m={rc_max_m:.3f}'
+            )
         return True, 'dynamic_r_between_u_and_c'
 
     def _dynamic_update_timed_out(self, started_monotonic):
@@ -1868,6 +2456,35 @@ class FcuInterfaceMavrosNode(Node):
             candidate = {'valid': False, 'reason': f'exception:{error}'}
         self._dynamic_metrics['r_calc_done'] = time.monotonic()
         calc_duration_ms = (time.monotonic() - calc_started) * 1000.0
+        prediction = candidate.get('prediction') or {}
+        if prediction:
+            self._publish_aburcd_event(
+                'ab_prediction_input',
+                current_seq=self._current_mission_seq(),
+                reached_seq=None,
+                sample_count=prediction.get('sample_count'),
+                window_sec=prediction.get('window_sec'),
+                height_source=prediction.get('height_source'),
+                height_b_m=prediction.get('height_b_m'),
+                v_forward_mean_mps=prediction.get('v_forward_mean_mps'),
+                vz_est_mps=prediction.get('vz_est_mps'),
+                vz_trend_mps2=prediction.get('vz_trend_mps2'),
+                vz_fit_rmse_mps=(
+                    prediction.get('vz_fit_rmse_mps')
+                    if math.isfinite(float(prediction.get('vz_fit_rmse_mps', float('nan'))))
+                    else None
+                ),
+                vz_estimation_mode=prediction.get('vz_estimation_mode'),
+                heading_error_mean_deg=prediction.get('heading_error_mean_deg'),
+                cross_track_mean_m=prediction.get('cross_track_mean_m'),
+            )
+        for iteration in candidate.get('iterations') or []:
+            self._publish_aburcd_event(
+                'r_prediction_iteration',
+                current_seq=self._current_mission_seq(),
+                reached_seq=None,
+                **iteration,
+            )
         valid, reason = self.validate_dynamic_r_candidate(candidate)
         if not valid:
             if not self._set_dynamic_update_result('R_SAFE_FALLBACK'):
@@ -1903,8 +2520,42 @@ class FcuInterfaceMavrosNode(Node):
             dynamic_r_lon=float(candidate['lon']),
             dynamic_r_alt=float(candidate['alt']),
             calculation_reason=candidate['reason'],
+            prediction_mode=prediction.get('vz_estimation_mode'),
+            iteration_count=prediction.get('iteration_count'),
+            converged=prediction.get('converged'),
+            rc_dynamic_m=candidate.get('rc_dynamic_m'),
+            predicted_height_r_m=prediction.get('predicted_height_r_m'),
+            predicted_vz_r_mps=prediction.get('predicted_vz_r_mps'),
+            predicted_v_forward_mps=prediction.get('predicted_v_forward_r_mps'),
+            vertical_prediction_mode=prediction.get('vertical_prediction_mode'),
+            vertical_zero_crossing_sec=prediction.get('vertical_zero_crossing_sec'),
+            fall_time_sec=prediction.get('fall_time_sec'),
+            release_delay_sec=(
+                prediction.get('release_delay_sec')
+                if prediction else self.dynamic_r_release_delay_sec
+            ),
             **self._gps_snapshot_fields(),
         )
+        if (
+            candidate.get('reason') == 'ab_multisample_prediction'
+            and self.dynamic_r_prediction_shadow_mode
+        ):
+            self._dynamic_prediction_shadow = copy.deepcopy(prediction)
+            if self._set_dynamic_update_result('R_SAFE_FALLBACK'):
+                self._publish_aburcd_event(
+                    'r_calc_shadow',
+                    current_seq=self._current_mission_seq(),
+                    reached_seq=None,
+                    rc_dynamic_m=candidate.get('rc_dynamic_m'),
+                    fallback='R_safe retained',
+                    reason='prediction_shadow_mode',
+                )
+                self._full_update_event(
+                    'dynamic_update_skipped',
+                    reason='prediction_shadow_mode',
+                    r_source='SAFE',
+                )
+            return
         if not self._mission_update_lock.acquire(blocking=False):
             if not self._set_dynamic_update_result('UPDATE_FAILED'):
                 return
@@ -2210,6 +2861,9 @@ class FcuInterfaceMavrosNode(Node):
                 'lat': float(candidate['lat']),
                 'lon': float(candidate['lon']),
             }
+            self._dynamic_prediction_commit = copy.deepcopy(
+                candidate.get('prediction')
+            )
             gps = self.get_best_gps()
             self._dynamic_update_verified = True
             self._dynamic_update_verified_monotonic = verified_at
@@ -3048,6 +3702,8 @@ class FcuInterfaceMavrosNode(Node):
         self._dynamic_update_verified_gps = None
         self._dynamic_update_result = 'NOT_OBSERVED'
         self._r_active_before_verify_reported = False
+        self._dynamic_prediction_commit = None
+        self._dynamic_prediction_shadow = None
         self.composite_route_points = {
             key: dict(value)
             for key, value in abcdr.items()

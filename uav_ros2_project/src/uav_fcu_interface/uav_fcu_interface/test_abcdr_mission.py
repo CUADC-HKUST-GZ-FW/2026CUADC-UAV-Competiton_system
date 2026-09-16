@@ -64,13 +64,17 @@ def make_node_without_ros():
     node.current_gps = None
     node.current_raw_gps = None
     node.current_vfr_hud = None
+    node.current_rel_alt_m = None
+    node.current_rel_alt_timestamp_monotonic = None
     node.last_reached_seq = -1
     node._waypoint_list_generation = 0
     node.live_vehicle_state = {
         'gps': None,
         'vfr_hud': None,
+        'rel_alt_m': None,
         'gps_timestamp_monotonic': None,
         'vfr_timestamp_monotonic': None,
+        'rel_alt_timestamp_monotonic': None,
     }
     node._last_mission_current_seq = None
     node._b_previous_signed_m = None
@@ -86,9 +90,22 @@ def make_node_without_ros():
     node._dynamic_update_verified_gps = None
     node._dynamic_update_result = 'NOT_OBSERVED'
     node._r_active_before_verify_reported = False
+    node._dynamic_prediction_commit = None
+    node._dynamic_prediction_shadow = None
     node.dynamic_r_enabled = True
     node.dynamic_r_test_mode = True
     node.dynamic_r_test_offset_m = 50.0
+    node.dynamic_r_prediction_window_sec = 1.2
+    node.dynamic_r_min_prediction_samples = 5
+    node.dynamic_r_min_prediction_span_sec = 0.4
+    node.dynamic_r_vz_fit_max_rmse_mps = 0.8
+    node.dynamic_r_max_abs_vertical_accel_mps2 = 3.0
+    node.dynamic_r_min_rc_m = 20.0
+    node.dynamic_r_min_u_r_distance_m = 5.0
+    node.dynamic_r_max_iterations = 4
+    node.dynamic_r_convergence_m = 0.5
+    node.dynamic_r_release_delay_sec = 0.0
+    node.dynamic_r_prediction_shadow_mode = False
     node.dynamic_r_update_timeout_sec = 6.0
     node.aburcd_update_metrics_enabled = True
     node.allow_mission_upload = True
@@ -501,7 +518,37 @@ def test_composite_aurd_layout_keeps_b_and_c_virtual():
     assert all(wp.x_lat != points['C']['lat'] for wp in mission[5:10])
 
 
-def test_dynamic_r_requires_explicit_test_mode_and_stays_between_u_and_c():
+def _prediction_snapshot(node, points, vertical_speeds=None, ground_speed=20.0):
+    vertical_speeds = vertical_speeds or [0.0] * 5
+    b_time = 100.0
+    samples = []
+    count = len(vertical_speeds)
+    for index, vertical_speed in enumerate(vertical_speeds):
+        fraction = index / max(1, count - 1)
+        distance_from_a_m = 25.0 + 25.0 * fraction
+        lat, lon = node.destination_point(
+            points['A']['lat'], points['A']['lon'], 90.0, distance_from_a_m
+        )
+        sample_time = b_time - 1.0 + fraction
+        samples.append({
+            'timestamp_unix_sec': sample_time,
+            'timestamp_monotonic': sample_time,
+            'lat': lat,
+            'lon': lon,
+            'ground_speed_mps': ground_speed,
+            'vertical_speed_mps': float(vertical_speed),
+            'heading_deg': 90.0,
+            'relative_altitude_m': 15.0,
+        })
+    return {
+        'timestamp_monotonic': b_time,
+        'relative_altitude_m': 15.0,
+        'relative_altitude_age_sec': 0.0,
+        'prediction_samples': samples,
+    }
+
+
+def test_dynamic_r_test_mode_and_prediction_mode_are_separate():
     node = make_node_without_ros()
     points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
     node.composite_route_points = points
@@ -511,7 +558,7 @@ def test_dynamic_r_requires_explicit_test_mode_and_stays_between_u_and_c():
     node.dynamic_r_test_mode = False
     candidate = node.compute_dynamic_r(snapshot, points['C'])
     assert not candidate['valid']
-    assert candidate['reason'] == 'production_dynamic_r_formula_not_configured'
+    assert candidate['reason'] == 'prediction_samples_insufficient'
 
     node.dynamic_r_test_mode = True
     candidate = node.compute_dynamic_r(snapshot, points['C'])
@@ -522,6 +569,102 @@ def test_dynamic_r_requires_explicit_test_mode_and_stays_between_u_and_c():
         candidate['lat'], candidate['lon'],
         points['C']['lat'], points['C']['lon'],
     ) == pytest.approx(50.0, abs=0.05)
+
+
+def test_dynamic_r_prediction_level_flight_matches_ballistic_solution():
+    node = make_node_without_ros()
+    points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
+    node.composite_route_points = points
+    node.dynamic_r_test_mode = False
+    snapshot = _prediction_snapshot(node, points)
+
+    candidate = node.compute_dynamic_r(snapshot, points['C'])
+
+    assert candidate['valid']
+    assert candidate['reason'] == 'ab_multisample_prediction'
+    expected_fall_time = math.sqrt(2.0 * 15.0 / 9.80665)
+    assert candidate['rc_dynamic_m'] == pytest.approx(
+        20.0 * expected_fall_time, abs=0.1
+    )
+    assert candidate['prediction']['vz_estimation_mode'] == 'trend'
+    assert node.validate_dynamic_r_candidate(candidate)[0]
+
+
+def test_dynamic_r_prediction_descending_flight_shortens_rc():
+    node = make_node_without_ros()
+    points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
+    node.composite_route_points = points
+    node.dynamic_r_test_mode = False
+    snapshot = _prediction_snapshot(node, points, vertical_speeds=[-1.0] * 5)
+
+    candidate = node.compute_dynamic_r(snapshot, points['C'])
+
+    assert candidate['valid']
+    assert candidate['rc_dynamic_m'] < 35.0
+    assert candidate['prediction']['predicted_vz_r_mps'] == pytest.approx(-1.0)
+
+
+def test_dynamic_r_prediction_damping_vertical_trend_levels_without_overshoot():
+    node = make_node_without_ros()
+    points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
+    node.composite_route_points = points
+    node.dynamic_r_test_mode = False
+    snapshot = _prediction_snapshot(
+        node, points, vertical_speeds=[-2.0, -1.6, -1.2, -0.8, -0.4]
+    )
+
+    candidate = node.compute_dynamic_r(snapshot, points['C'])
+
+    assert candidate['valid']
+    assert candidate['prediction']['vz_estimation_mode'] == 'trend'
+    assert candidate['prediction']['vertical_prediction_mode'] == 'trend_to_level'
+    assert candidate['prediction']['predicted_vz_r_mps'] == pytest.approx(0.0)
+    assert candidate['prediction']['vertical_zero_crossing_sec'] > 0.0
+
+
+def test_dynamic_r_prediction_bad_vz_fit_falls_back_to_weighted_mean():
+    node = make_node_without_ros()
+    points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
+    node.composite_route_points = points
+    node.dynamic_r_test_mode = False
+    node.dynamic_r_vz_fit_max_rmse_mps = 0.05
+    snapshot = _prediction_snapshot(
+        node, points, vertical_speeds=[-1.0, 0.8, -0.9, 0.7, -0.8]
+    )
+
+    candidate = node.compute_dynamic_r(snapshot, points['C'])
+
+    assert candidate['valid']
+    assert candidate['prediction']['vz_estimation_mode'] == 'weighted_mean'
+    assert candidate['prediction']['vz_trend_mps2'] == 0.0
+
+
+def test_dynamic_r_prediction_stale_relative_altitude_falls_back_safe():
+    node = make_node_without_ros()
+    points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
+    node.composite_route_points = points
+    node.dynamic_r_test_mode = False
+    snapshot = _prediction_snapshot(node, points)
+    snapshot['relative_altitude_age_sec'] = 2.0
+
+    candidate = node.compute_dynamic_r(snapshot, points['C'])
+
+    assert not candidate['valid']
+    assert candidate['reason'] == 'relative_altitude_stale'
+
+
+def test_dynamic_r_prediction_rejects_rc_outside_configured_bounds():
+    node = make_node_without_ros()
+    points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
+    node.composite_route_points = points
+    node.dynamic_r_test_mode = False
+    node.dynamic_r_min_rc_m = 40.0
+    snapshot = _prediction_snapshot(node, points)
+
+    candidate = node.compute_dynamic_r(snapshot, points['C'])
+
+    assert not candidate['valid']
+    assert candidate['reason'] == 'rc_out_of_range'
 
 
 def test_dynamic_r_outside_u_c_interval_is_rejected():

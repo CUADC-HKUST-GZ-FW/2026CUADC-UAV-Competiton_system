@@ -63,10 +63,23 @@ COMMON_FCU_ARGUMENT_DEFAULTS = {
     # Composite target-segment altitude.
     'mission_altitude_m': '15.0',
 
-    # TEST ONLY dynamic-R path, enabled for the current validation campaign.
+    # Dynamic-R prediction. Set dynamic_r_test_mode=true only when the old
+    # fixed-offset test path is explicitly needed.
     'dynamic_r_enabled': 'true',
-    'dynamic_r_test_mode': 'true',
+    'dynamic_r_test_mode': 'false',
     'dynamic_r_test_offset_m': '50.0',
+    'dynamic_r_prediction_window_sec': '1.2',
+    'dynamic_r_min_prediction_samples': '5',
+    'dynamic_r_min_prediction_span_sec': '0.4',
+    'dynamic_r_vz_fit_max_rmse_mps': '0.8',
+    'dynamic_r_max_abs_vertical_accel_mps2': '3.0',
+    'dynamic_r_min_rc_m': '20.0',
+    'dynamic_r_min_u_r_distance_m': '5.0',
+    'dynamic_r_max_iterations': '4',
+    'dynamic_r_convergence_m': '0.5',
+    # Reserved for later mechanism-delay calibration; intentionally zero now.
+    'dynamic_r_release_delay_sec': '0.0',
+    'dynamic_r_prediction_shadow_mode': 'false',
     'dynamic_r_update_timeout_sec': '6.0',
     'aburcd_update_metrics_enabled': 'true',
 }

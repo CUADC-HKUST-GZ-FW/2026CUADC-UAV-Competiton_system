@@ -275,7 +275,9 @@ class FlightSummaryLoggerNode(Node):
         'mission_progress_check', 'mission_progress_safe', 'mission_progress_accepted',
         'mission_state_unknown', 'dynamic_mission_failed',
         'mission_current_a', 'a_reached', 'b_crossed', 'b_state_frozen',
-        'r_calc_start', 'r_calc_done', 'r_calc_failed', 'second_full_push_start',
+        'ab_prediction_input', 'r_prediction_iteration',
+        'r_calc_start', 'r_calc_done', 'r_calc_failed', 'r_calc_shadow',
+        'release_state_actual', 'second_full_push_start',
         'second_full_push_done', 'second_full_pull_start', 'second_full_pull_done', 'second_full_push_failed',
         'dynamic_mission_verified', 'dynamic_update_cancelled',
         'mission_inconsistent', 'r_dynamic_out_of_range',
@@ -304,6 +306,20 @@ class FlightSummaryLoggerNode(Node):
         'dynamic_update_state',
         'deadline_current_seq', 'deadline_last_reached_seq',
         'dynamic_worker_cancel_reason',
+        'relative_altitude_m', 'relative_altitude_age_sec', 'height_source',
+        'sample_count', 'window_sec', 'height_b_m', 'v_forward_mean_mps',
+        'vz_est_mps', 'vz_trend_mps2', 'vz_fit_rmse_mps',
+        'vz_estimation_mode', 'heading_error_mean_deg', 'cross_track_mean_m',
+        'iteration', 'rc_guess_m', 'distance_b_to_r_m', 't_br_sec',
+        'predicted_height_r_m', 'predicted_vz_r_mps',
+        'predicted_v_forward_r_mps', 'vertical_prediction_mode',
+        'vertical_zero_crossing_sec', 'fall_time_sec', 'rc_new_m',
+        'delta_rc_m', 'rc_dynamic_m', 'release_delay_sec',
+        'predicted_forward_speed_r_mps', 'actual_forward_speed_r_mps',
+        'forward_speed_prediction_error_mps',
+        'predicted_vertical_speed_r_mps', 'actual_vertical_speed_r_mps',
+        'vertical_speed_prediction_error_mps', 'actual_height_r_m',
+        'height_prediction_error_m', 'prediction_source',
     )
     _ABURCD_HUMAN_FIELDS = (
         'current_seq', 'reached_seq', 'r_seq', 'snapshot_latency_ms',
@@ -313,6 +329,8 @@ class FlightSummaryLoggerNode(Node):
         'reason', 'dynamic_worker_cancel_reason', 'action', 'dynamic_update_state',
         'current_seq_before_update', 'last_reached_seq_before_update',
         'current_seq_after_update', 'last_reached_seq_after_update',
+        'rc_dynamic_m', 'prediction_mode', 'vertical_prediction_mode',
+        'fall_time_sec', 'release_delay_sec',
     )
 
     def _format_human_event(self, record):
@@ -446,6 +464,54 @@ class FlightSummaryLoggerNode(Node):
             return ('DYNAMIC R\n  result: FAILED\n'
                     f'  mission_state: {record.get("mission_state")}\n'
                     f'  reason: {record.get("reason")}')
+
+        if event == 'ab_prediction_input':
+            return (
+                f'[{timestamp}] ABURCD  AB_PREDICTION_INPUT\n'
+                f'  samples: {record.get("sample_count")} '
+                f'window={record.get("window_sec")} s\n'
+                f'  height: {record.get("height_b_m")} m '
+                f'source={record.get("height_source")}\n'
+                f'  v_forward: {record.get("v_forward_mean_mps")} m/s\n'
+                f'  vz: {record.get("vz_est_mps")} m/s '
+                f'az={record.get("vz_trend_mps2")} m/s^2 '
+                f'mode={record.get("vz_estimation_mode")}\n'
+                f'  vz fit rmse: {record.get("vz_fit_rmse_mps")} m/s\n'
+                f'  heading error mean: {record.get("heading_error_mean_deg")} deg\n'
+                f'  cross track mean: {record.get("cross_track_mean_m")} m'
+            )
+
+        if event == 'r_prediction_iteration':
+            return (
+                f'[{timestamp}] ABURCD  R_PREDICTION_ITERATION\n'
+                f'  iteration: {record.get("iteration")}\n'
+                f'  RC guess -> new: {record.get("rc_guess_m")} -> '
+                f'{record.get("rc_new_m")} m '
+                f'delta={record.get("delta_rc_m")} m\n'
+                f'  B->R: {record.get("distance_b_to_r_m")} m '
+                f't={record.get("t_br_sec")} s\n'
+                f'  predicted H_R: {record.get("predicted_height_r_m")} m\n'
+                f'  predicted vz_R: {record.get("predicted_vz_r_mps")} m/s\n'
+                f'  fall time: {record.get("fall_time_sec")} s'
+            )
+
+        if event == 'release_state_actual':
+            return (
+                f'[{timestamp}] ABURCD  RELEASE_STATE_ACTUAL\n'
+                f'  source: {record.get("prediction_source")}\n'
+                f'  v_forward predicted/actual/error: '
+                f'{record.get("predicted_forward_speed_r_mps")} / '
+                f'{record.get("actual_forward_speed_r_mps")} / '
+                f'{record.get("forward_speed_prediction_error_mps")} m/s\n'
+                f'  vz predicted/actual/error: '
+                f'{record.get("predicted_vertical_speed_r_mps")} / '
+                f'{record.get("actual_vertical_speed_r_mps")} / '
+                f'{record.get("vertical_speed_prediction_error_mps")} m/s\n'
+                f'  height predicted/actual/error: '
+                f'{record.get("predicted_height_r_m")} / '
+                f'{record.get("actual_height_r_m")} / '
+                f'{record.get("height_prediction_error_m")} m'
+            )
 
         if event in self._ABURCD_EVENTS:
             lines = [f'[{timestamp}] ABURCD  {event.upper()}']
