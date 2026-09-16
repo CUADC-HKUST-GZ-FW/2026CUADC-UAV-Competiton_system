@@ -270,7 +270,8 @@ class FlightSummaryLoggerNode(Node):
     _ABURCD_EVENTS = {
         'mission_current_a', 'a_reached', 'b_crossed', 'b_state_frozen',
         'r_calc_start', 'r_calc_done', 'r_calc_failed', 'r_push_start',
-        'r_push_ack', 'r_push_failed', 'r_push_verified',
+        'r_push_ack', 'r_pull_start', 'r_pull_done', 'r_push_failed',
+        'r_push_verified', 'dynamic_update_cancelled',
         'r_push_verify_failed', 'r_dynamic_out_of_range',
         'mission_current_u', 'u_reached',
         'mission_current_r', 'r_reached', 'r_update_rejected_late',
@@ -285,6 +286,20 @@ class FlightSummaryLoggerNode(Node):
         'snapshot_latency_ms', 'calc_duration_ms', 'push_duration_ms',
         'verify_duration_ms', 'dynamic_update_total_ms',
         'r_commit_margin_sec', 'r_commit_margin_m', 'failure_reason',
+        'partial_push_attempt', 'partial_push_start_ms',
+        'partial_push_ack_ms', 'partial_push_failure_reason',
+        'pull_after_push_start', 'pull_after_push_done',
+        'verify_cpu_duration_ms', 'deadline_current_seq',
+        'deadline_last_reached_seq', 'r_actual_after_failure',
+        'r_restore_attempted', 'r_restore_result',
+        'dynamic_worker_cancel_reason',
+    )
+    _ABURCD_HUMAN_FIELDS = (
+        'current_seq', 'reached_seq', 'r_seq', 'snapshot_latency_ms',
+        'calc_duration_ms', 'push_duration_ms', 'verify_duration_ms',
+        'dynamic_update_total_ms', 'r_commit_margin_sec',
+        'r_commit_margin_m', 'failure_reason', 'r_actual_after_failure',
+        'r_restore_result', 'dynamic_worker_cancel_reason',
     )
 
     def _format_human_event(self, record):
@@ -394,9 +409,7 @@ class FlightSummaryLoggerNode(Node):
 
         if event in self._ABURCD_EVENTS:
             lines = [f'[{timestamp}] ABURCD  {event.upper()}']
-            for key in self._ABURCD_METRIC_FIELDS:
-                if key in {'time', 'event', 'task_id'}:
-                    continue
+            for key in self._ABURCD_HUMAN_FIELDS:
                 value = record.get(key)
                 if value is not None:
                     lines.append(f'  {key}: {value}')

@@ -314,8 +314,17 @@ class PayloadMonitor:
             return []
         matched = abs(self.observed_pwm - self.config.release_pwm) <= self.config.pwm_tolerance_us
 
-        if self._passage_inferred and not self.release_command_reached and matched:
-            reached_events = self._mark_reached('seq_and_pwm', now)
+        if (
+            not self.release_command_reached
+            and matched
+            and (self._passage_inferred or self.execution_window_armed)
+        ):
+            evidence = (
+                'seq_and_pwm'
+                if self._passage_inferred
+                else 'pre_release_waypoint_reached_and_pwm'
+            )
+            reached_events = self._mark_reached(evidence, now)
         else:
             reached_events = []
 

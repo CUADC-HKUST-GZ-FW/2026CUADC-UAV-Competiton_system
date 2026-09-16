@@ -230,6 +230,23 @@ class PayloadMonitorTest(unittest.TestCase):
         self.assertIn('release_seq=6 reached_seq=5', events[0].message)
         self.assertEqual([], monitor.observe_waypoint_reached(5, 10.1))
 
+    def test_r_reached_and_pwm_confirms_when_current_seq_is_stale(self):
+        monitor = self.make_monitor(required_consecutive_samples=1)
+        monitor.observe_mission(mission(release_seq=6), 4, 1.0)
+
+        monitor.observe_waypoint_reached(5, 1.1)
+        events = monitor.observe_rc_out([1500] * 6 + [1900], 1.2)
+
+        self.assertEqual(
+            ['command_reached', 'pwm_confirmed'],
+            [event.key for event in events],
+        )
+        self.assertIn(
+            'evidence=pre_release_waypoint_reached_and_pwm',
+            events[0].message,
+        )
+        self.assertEqual(PayloadMonitorState.PWM_CONFIRMED, monitor.state)
+
     def test_timeout_can_recover_from_late_seq_and_pwm_evidence(self):
         monitor = self.make_monitor(
             execution_timeout_s=2.0,

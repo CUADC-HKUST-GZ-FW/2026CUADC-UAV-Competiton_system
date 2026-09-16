@@ -14,7 +14,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 
 from sensor_msgs.msg import NavSatFix
 from mavros_msgs.msg import (
-    State, VfrHud, Waypoint, WaypointList, WaypointReached,
+    Mavlink, State, VfrHud, Waypoint, WaypointList, WaypointReached,
 )
 from mavros_msgs.srv import (
     WaypointClear,
@@ -26,6 +26,10 @@ from std_msgs.msg import String
 
 from uav_interfaces.srv import GoToGlobal
 
+from uav_fcu_interface.mission_partial_adapter import (
+    MissionPartialUpdateAdapter,
+    PartialUpdateAborted,
+)
 from uav_fcu_interface.mission_verification import verify_mission_waypoints
 
 
@@ -48,6 +52,7 @@ class FcuInterfaceMavrosNode(Node):
         self.current_raw_gps = None
         self.current_vfr_hud = None
         self.current_waypoints = None
+        self._waypoint_list_generation = 0
 
         self.last_reached_seq = -1
         self.active_task_id = 'none'
@@ -66,9 +71,15 @@ class FcuInterfaceMavrosNode(Node):
         self.composite_expected_waypoints = None
         self.composite_safe_r_waypoint = None
         self._last_mission_current_seq = None
+        self._raw_mission_current_seq = None
         self._b_previous_signed_m = None
         self._b_crossing_triggered = False
         self._dynamic_update_started = False
+        self._dynamic_update_state = 'IDLE'
+        self._dynamic_update_cancelled = False
+        self._dynamic_worker_cancel_reason = None
+        self._dynamic_metrics = {}
+        self.b_frozen_snapshot = None
         self._dynamic_update_verified = False
         self._dynamic_update_verified_monotonic = None
         self._dynamic_update_verified_gps = None
@@ -85,6 +96,13 @@ class FcuInterfaceMavrosNode(Node):
         self._last_connected = None
         self._last_b_check_pending_log_time = 0.0
         self._gps_lock = threading.Lock()
+        self._live_state_lock = threading.Lock()
+        self.live_vehicle_state = {
+            'gps': None,
+            'vfr_hud': None,
+            'gps_timestamp_monotonic': None,
+            'vfr_timestamp_monotonic': None,
+        }
 
         # General
         self.declare_parameter('dry_run_goto', True)
@@ -145,6 +163,10 @@ class FcuInterfaceMavrosNode(Node):
         self.declare_parameter('dynamic_r_test_offset_m', 50.0)
         self.declare_parameter('dynamic_r_update_timeout_sec', 6.0)
         self.declare_parameter('aburcd_update_metrics_enabled', True)
+        self.declare_parameter('target_system_id', 1)
+        self.declare_parameter('target_component_id', 1)
+        self.declare_parameter('partial_adapter_source_system_id', 255)
+        self.declare_parameter('partial_adapter_source_component_id', 190)
 
         self.dry_run_goto = bool(self.get_parameter('dry_run_goto').value)
         self.allow_mission_upload = bool(
@@ -258,6 +280,10 @@ class FcuInterfaceMavrosNode(Node):
         self.aburcd_update_metrics_enabled = bool(
             self.get_parameter('aburcd_update_metrics_enabled').value
         )
+        self.target_system_id = int(self.get_parameter('target_system_id').value)
+        self.target_component_id = int(
+            self.get_parameter('target_component_id').value
+        )
         if not (
             self.a_offset_m > self.b_offset_m > self.u_offset_m
             > self.release_offset_m > 0.0
@@ -335,6 +361,37 @@ class FcuInterfaceMavrosNode(Node):
             '/mission/active_task_id',
             self.task_id_callback,
             task_qos,
+            callback_group=self.callback_group,
+        )
+        self.create_subscription(
+            String,
+            '/mission/safety_state',
+            self.mission_safety_state_callback,
+            10,
+            callback_group=self.callback_group,
+        )
+        self.mavlink_to_publisher = self.create_publisher(
+            Mavlink,
+            '/mavlink/to',
+            10,
+        )
+        self.partial_update_adapter = MissionPartialUpdateAdapter(
+            self.mavlink_to_publisher,
+            target_system=self.target_system_id,
+            target_component=self.target_component_id,
+            source_system=int(
+                self.get_parameter('partial_adapter_source_system_id').value
+            ),
+            source_component=int(
+                self.get_parameter('partial_adapter_source_component_id').value
+            ),
+            message_observer=self._raw_mavlink_message_callback,
+        )
+        self.create_subscription(
+            Mavlink,
+            '/mavlink/from',
+            self.partial_update_adapter.handle_ros_message,
+            sensor_qos,
             callback_group=self.callback_group,
         )
         self.composite_complete_publisher = self.create_publisher(
@@ -431,10 +488,19 @@ class FcuInterfaceMavrosNode(Node):
         self.current_state = msg
 
     def task_id_callback(self, msg):
+        previous = self.active_task_id
         self.active_task_id = msg.data.strip() or 'none'
+        if previous not in {'', 'none'} and self.active_task_id in {'', 'none'}:
+            self._cancel_dynamic_update('task_cleared')
+
+    def mission_safety_state_callback(self, msg):
+        state = str(msg.data).strip().upper()
+        if state == 'MISSION_COMPLETE':
+            self._cancel_dynamic_update('mission_complete')
 
     def gps_callback(self, msg):
         self.current_gps = msg
+        self._update_live_gps(msg)
         self._record_gps_sample(msg)
         self.update_composite_trajectory_check(msg)
         self._maybe_detect_virtual_b_crossing(msg)
@@ -443,12 +509,29 @@ class FcuInterfaceMavrosNode(Node):
         self.current_raw_gps = msg
         if self.current_gps is None:
             self.current_gps = msg
+            self._update_live_gps(msg)
             self._record_gps_sample(msg)
             self.update_composite_trajectory_check(msg)
             self._maybe_detect_virtual_b_crossing(msg)
 
     def vfr_hud_callback(self, msg):
         self.current_vfr_hud = msg
+        with self._live_state_lock:
+            self.live_vehicle_state['vfr_hud'] = {
+                'ground_speed_mps': float(msg.groundspeed),
+                'vertical_speed_mps': float(msg.climb),
+                'heading_deg': float(msg.heading),
+            }
+            self.live_vehicle_state['vfr_timestamp_monotonic'] = time.monotonic()
+
+    def _update_live_gps(self, msg):
+        with self._live_state_lock:
+            self.live_vehicle_state['gps'] = {
+                'lat': float(msg.latitude),
+                'lon': float(msg.longitude),
+                'altitude_m': float(msg.altitude),
+            }
+            self.live_vehicle_state['gps_timestamp_monotonic'] = time.monotonic()
 
     def waypoints_callback(self, msg):
         current_seq = int(msg.current_seq)
@@ -459,6 +542,7 @@ class FcuInterfaceMavrosNode(Node):
             # Update the live cache and adjudicate R-active vs. verified under
             # one lock so the callback and verification worker are exclusive.
             self.current_waypoints = msg
+            self._waypoint_list_generation += 1
             if current_seq == self._last_mission_current_seq:
                 return
             self._last_mission_current_seq = current_seq
@@ -470,6 +554,9 @@ class FcuInterfaceMavrosNode(Node):
                 and not self._dynamic_update_verified
             ):
                 self._dynamic_update_result = 'UPDATE_TOO_LATE'
+                self._dynamic_update_state = 'TOO_LATE'
+                self._dynamic_update_cancelled = True
+                self._dynamic_worker_cancel_reason = 'mission_current_r'
                 if not self._r_active_before_verify_reported:
                     self._r_active_before_verify_reported = True
                     late_before_verified = True
@@ -511,7 +598,38 @@ class FcuInterfaceMavrosNode(Node):
             )
 
     def waypoint_reached_callback(self, msg):
-        self.last_reached_seq = int(msg.wp_seq)
+        reached_seq = int(msg.wp_seq)
+        late_before_verified = False
+        with self._dynamic_state_lock:
+            self.last_reached_seq = max(self.last_reached_seq, reached_seq)
+            if (
+                self._dynamic_update_started
+                and self.composite_seq_r is not None
+                and reached_seq >= self.composite_seq_r
+                and not self._dynamic_update_verified
+            ):
+                self._dynamic_update_result = 'UPDATE_TOO_LATE'
+                self._dynamic_update_state = 'TOO_LATE'
+                self._dynamic_update_cancelled = True
+                self._dynamic_worker_cancel_reason = 'r_reached'
+                if not self._r_active_before_verify_reported:
+                    self._r_active_before_verify_reported = True
+                    late_before_verified = True
+            elif (
+                self.composite_seq_d is not None
+                and reached_seq >= self.composite_seq_d
+            ):
+                self._dynamic_update_cancelled = True
+                self._dynamic_worker_cancel_reason = 'd_reached'
+                if self._dynamic_update_state not in {'VERIFIED', 'FAILED', 'TOO_LATE'}:
+                    self._dynamic_update_state = 'CANCELLED'
+            if (
+                self.composite_seq_r is not None
+                and reached_seq >= self.composite_seq_r
+            ):
+                self._dynamic_update_cancelled = True
+                if self._dynamic_worker_cancel_reason is None:
+                    self._dynamic_worker_cancel_reason = 'r_reached'
         self.get_logger().info(
             self._prefix('FCU')
             + f' waypoint reached seq={self.last_reached_seq} '
@@ -520,12 +638,141 @@ class FcuInterfaceMavrosNode(Node):
         )
         self.update_composite_trajectory_from_reached(self.last_reached_seq)
         self._record_aburcd_reached(self.last_reached_seq)
+        if late_before_verified:
+            self._publish_aburcd_event(
+                'error_r_active_before_update_verified',
+                current_seq=self._current_mission_seq(),
+                reached_seq=reached_seq,
+                failure_reason='R reached before dynamic update verification',
+                deadline_current_seq=self._current_mission_seq(),
+                deadline_last_reached_seq=self.last_reached_seq,
+                **self._gps_snapshot_fields(),
+            )
         self.maybe_report_composite_mission_complete()
+
+    def _raw_mavlink_message_callback(self, message):
+        """Use raw MISSION_CURRENT while the MAVROS waypoint list is stale."""
+        if str(message.get_type()) != 'MISSION_CURRENT':
+            return
+        current_seq = int(message.seq)
+        late_before_verified = False
+        with self._dynamic_state_lock:
+            self._raw_mission_current_seq = current_seq
+            if current_seq == self._last_mission_current_seq:
+                return
+            self._last_mission_current_seq = current_seq
+            if (
+                self.mission_type == 'COMPOSITE'
+                and self.composite_seq_r is not None
+                and current_seq >= self.composite_seq_r
+                and self._dynamic_update_started
+                and not self._dynamic_update_verified
+            ):
+                self._dynamic_update_result = 'UPDATE_TOO_LATE'
+                self._dynamic_update_state = 'TOO_LATE'
+                self._dynamic_update_cancelled = True
+                self._dynamic_worker_cancel_reason = 'raw_mission_current_r'
+                if not self._r_active_before_verify_reported:
+                    self._r_active_before_verify_reported = True
+                    late_before_verified = True
+
+        if self.mission_type != 'COMPOSITE':
+            return
+        item = self.composite_item_name(current_seq)
+        if item in {'A', 'U', 'R'}:
+            self._publish_aburcd_event(
+                f'mission_current_{item.lower()}',
+                current_seq=current_seq,
+                reached_seq=None,
+                deadline_source='raw_mavlink_mission_current',
+                **self._gps_snapshot_fields(),
+            )
+        if late_before_verified:
+            self._publish_aburcd_event(
+                'error_r_active_before_update_verified',
+                current_seq=current_seq,
+                reached_seq=None,
+                failure_reason=(
+                    'raw MISSION_CURRENT reported R before verification'
+                ),
+                deadline_source='raw_mavlink_mission_current',
+                **self._gps_snapshot_fields(),
+            )
 
     def _current_mission_seq(self):
         if self.current_waypoints is None:
             return None
         return int(self.current_waypoints.current_seq)
+
+    def _dynamic_deadline_evidence_locked(self):
+        current_seq = self._current_mission_seq()
+        r_seq = self.dynamic_indices.get('R')
+        reached_seq = self.last_reached_seq
+        if r_seq is not None and reached_seq >= int(r_seq):
+            return 'r_reached', current_seq, reached_seq
+        if (
+            r_seq is not None
+            and self._raw_mission_current_seq is not None
+            and self._raw_mission_current_seq >= int(r_seq)
+        ):
+            return 'raw_mission_current_r', current_seq, reached_seq
+        if r_seq is not None and current_seq is not None and current_seq >= int(r_seq):
+            return 'mission_current_r', current_seq, reached_seq
+        if self._dynamic_update_cancelled:
+            return (
+                self._dynamic_worker_cancel_reason or 'cancelled',
+                current_seq,
+                reached_seq,
+            )
+        return None, current_seq, reached_seq
+
+    def _dynamic_abort_reason(self, started_monotonic):
+        with self._dynamic_state_lock:
+            reason, current_seq, reached_seq = self._dynamic_deadline_evidence_locked()
+            if reason:
+                if reason in {
+                    'r_reached', 'raw_mission_current_r', 'mission_current_r'
+                }:
+                    self._dynamic_update_result = 'UPDATE_TOO_LATE'
+                    self._dynamic_update_state = 'TOO_LATE'
+                    self._dynamic_update_cancelled = True
+                    self._dynamic_worker_cancel_reason = reason
+                return (
+                    f'{reason};deadline_current_seq={current_seq};'
+                    f'deadline_last_reached_seq={reached_seq}'
+                )
+            if self._dynamic_update_timed_out(started_monotonic):
+                self._dynamic_update_state = 'FAILED'
+                self._dynamic_update_result = 'UPDATE_FAILED'
+                self._dynamic_update_cancelled = True
+                self._dynamic_worker_cancel_reason = 'dynamic_update_timeout'
+                return 'DYNAMIC_UPDATE_TIMEOUT'
+        return None
+
+    def _require_dynamic_operation_allowed(self, started_monotonic, operation):
+        reason = self._dynamic_abort_reason(started_monotonic)
+        if reason:
+            raise PartialUpdateAborted(f'{operation}:{reason}')
+
+    def _cancel_dynamic_update(self, reason):
+        publish = False
+        with self._dynamic_state_lock:
+            if self._dynamic_update_cancelled:
+                return
+            self._dynamic_update_cancelled = True
+            self._dynamic_worker_cancel_reason = str(reason)
+            if self._dynamic_update_started and not self._dynamic_update_verified:
+                if self._dynamic_update_state not in {'FAILED', 'TOO_LATE'}:
+                    self._dynamic_update_state = 'CANCELLED'
+                publish = True
+        if publish:
+            self._publish_aburcd_event(
+                'dynamic_update_cancelled',
+                dynamic_worker_cancel_reason=str(reason),
+                deadline_current_seq=self._current_mission_seq(),
+                deadline_last_reached_seq=self.last_reached_seq,
+                **self._gps_snapshot_fields(),
+            )
 
     def _latch_dynamic_update_too_late(self, event, failure_reason, **fields):
         """Latch a too-late result once, using the live current-seq cache."""
@@ -539,6 +786,9 @@ class FcuInterfaceMavrosNode(Node):
             ):
                 return False
             self._dynamic_update_result = 'UPDATE_TOO_LATE'
+            self._dynamic_update_state = 'TOO_LATE'
+            self._dynamic_update_cancelled = True
+            self._dynamic_worker_cancel_reason = str(failure_reason)
             self._r_active_before_verify_reported = True
             self._publish_aburcd_event(
                 event,
@@ -555,10 +805,11 @@ class FcuInterfaceMavrosNode(Node):
             if self._dynamic_update_result == 'UPDATE_TOO_LATE':
                 return False
             self._dynamic_update_result = str(result)
+            if result in {'UPDATE_FAILED', 'R_SAFE_FALLBACK'}:
+                self._dynamic_update_state = 'FAILED'
             return True
 
     def _gps_snapshot_fields(self, gps=None):
-        gps = gps or self.get_best_gps()
         fields = {
             'lat': None,
             'lon': None,
@@ -569,26 +820,39 @@ class FcuInterfaceMavrosNode(Node):
             'distance_to_u_m': None,
             'distance_to_r_m': None,
         }
+        live_vfr = None
+        if gps is None and hasattr(self, 'live_vehicle_state'):
+            with self._live_state_lock:
+                live_gps = self.live_vehicle_state.get('gps')
+                live_vfr = self.live_vehicle_state.get('vfr_hud')
+                live_gps = dict(live_gps) if live_gps is not None else None
+                live_vfr = dict(live_vfr) if live_vfr is not None else None
+            if live_gps is not None:
+                fields.update(live_gps)
+        else:
+            gps = gps or self.get_best_gps()
         if gps is not None:
             fields.update({
                 'lat': float(gps.latitude),
                 'lon': float(gps.longitude),
                 'altitude_m': float(gps.altitude),
             })
-            if self.composite_route_points is not None:
-                fields['distance_to_u_m'] = self.distance_m(
-                    gps.latitude,
-                    gps.longitude,
-                    self.composite_route_points['U']['lat'],
-                    self.composite_route_points['U']['lon'],
-                )
-                fields['distance_to_r_m'] = self.distance_m(
-                    gps.latitude,
-                    gps.longitude,
-                    self.composite_route_points['R']['lat'],
-                    self.composite_route_points['R']['lon'],
-                )
-        if self.current_vfr_hud is not None:
+        if fields['lat'] is not None and self.composite_route_points is not None:
+            fields['distance_to_u_m'] = self.distance_m(
+                fields['lat'],
+                fields['lon'],
+                self.composite_route_points['U']['lat'],
+                self.composite_route_points['U']['lon'],
+            )
+            fields['distance_to_r_m'] = self.distance_m(
+                fields['lat'],
+                fields['lon'],
+                self.composite_route_points['R']['lat'],
+                self.composite_route_points['R']['lon'],
+            )
+        if live_vfr is not None:
+            fields.update(live_vfr)
+        elif self.current_vfr_hud is not None:
             fields.update({
                 'ground_speed_mps': float(self.current_vfr_hud.groundspeed),
                 'vertical_speed_mps': float(self.current_vfr_hud.climb),
@@ -658,6 +922,7 @@ class FcuInterfaceMavrosNode(Node):
             or self.mission_type != 'COMPOSITE'
             or self.composite_route_points is None
             or self._b_crossing_triggered
+            or self._dynamic_update_cancelled
         ):
             return
         signed_m = self._virtual_b_signed_distance_m(gps)
@@ -677,6 +942,7 @@ class FcuInterfaceMavrosNode(Node):
         if current_seq is None or r_seq is None or current_seq >= r_seq:
             self._b_crossing_triggered = True
             self._dynamic_update_result = 'UPDATE_TOO_LATE'
+            self._dynamic_update_state = 'TOO_LATE'
             self._publish_aburcd_event(
                 'r_update_rejected_late',
                 current_seq=current_seq,
@@ -700,8 +966,11 @@ class FcuInterfaceMavrosNode(Node):
         snapshot['snapshot_latency_ms'] = (
             time.monotonic() - detected
         ) * 1000.0
+        self.b_frozen_snapshot = dict(snapshot)
         self._b_crossing_triggered = True
         self._dynamic_update_started = True
+        self._dynamic_update_state = 'CALCULATING'
+        self._dynamic_worker_cancel_reason = None
         self._publish_aburcd_event(
             'b_crossed',
             current_seq=current_seq,
@@ -1041,6 +1310,7 @@ class FcuInterfaceMavrosNode(Node):
             else 'unknown'
         )
         self.composite_completion_reported = True
+        self._cancel_dynamic_update('composite_complete')
         message = String()
         message.data = (
             f'task_id={self.active_task_id} mission_type=COMPOSITE '
@@ -1656,6 +1926,7 @@ class FcuInterfaceMavrosNode(Node):
 
     def _dynamic_r_worker(self, snapshot):
         started = float(snapshot['timestamp_monotonic'])
+        self._dynamic_update_state = 'CALCULATING'
         self._publish_aburcd_event(
             'r_calc_start',
             current_seq=self._current_mission_seq(),
@@ -1690,6 +1961,11 @@ class FcuInterfaceMavrosNode(Node):
                 **self._gps_snapshot_fields(),
             )
             return
+        try:
+            self._require_dynamic_operation_allowed(started, 'after_calculation')
+        except PartialUpdateAborted as error:
+            self._finish_dynamic_abort(str(error), started)
+            return
         self._publish_aburcd_event(
             'r_calc_done',
             current_seq=self._current_mission_seq(),
@@ -1701,16 +1977,6 @@ class FcuInterfaceMavrosNode(Node):
             calculation_reason=candidate['reason'],
             **self._gps_snapshot_fields(),
         )
-        if self._dynamic_update_timed_out(started):
-            if not self._set_dynamic_update_result('UPDATE_FAILED'):
-                return
-            self._publish_aburcd_event(
-                'r_push_failed',
-                failure_reason='dynamic_r_update_timeout_before_push',
-                calc_duration_ms=calc_duration_ms,
-                **self._gps_snapshot_fields(),
-            )
-            return
         if not self._mission_update_lock.acquire(blocking=False):
             if not self._set_dynamic_update_result('UPDATE_FAILED'):
                 return
@@ -1726,23 +1992,16 @@ class FcuInterfaceMavrosNode(Node):
                     candidate, snapshot, calc_duration_ms
                 )
             )
-        except Exception as error:  # noqa: BLE001 - retain safe mission.
-            restored, restore_reason = asyncio.run(
-                self._restore_safe_r_once_async(int(self.dynamic_indices['R']))
-            )
-            if not self._set_dynamic_update_result(
-                'R_SAFE_FALLBACK' if restored else 'UPDATE_FAILED'
-            ):
-                return
-            self._publish_aburcd_event(
-                'r_push_failed',
-                failure_reason=str(error),
-                fallback=(
-                    'R_safe restored'
-                    if restored
-                    else f'R_safe unconfirmed:{restore_reason}'
-                ),
-                **self._gps_snapshot_fields(),
+        except PartialUpdateAborted as error:
+            self._finish_dynamic_abort(str(error), started)
+        except Exception as error:  # noqa: BLE001 - reconcile uncertain FCU state.
+            asyncio.run(
+                self._handle_dynamic_update_failure_async(
+                    candidate,
+                    started,
+                    str(error),
+                    calc_duration_ms=calc_duration_ms,
+                )
             )
         finally:
             self._mission_update_lock.release()
@@ -1752,14 +2011,8 @@ class FcuInterfaceMavrosNode(Node):
     ):
         started = float(snapshot['timestamp_monotonic'])
         r_seq = int(self.dynamic_indices['R'])
+        self._require_dynamic_operation_allowed(started, 'before_partial_push')
         current_seq = self._current_mission_seq()
-        if current_seq is None or current_seq >= r_seq:
-            self._latch_dynamic_update_too_late(
-                'r_update_rejected_late',
-                'R is no longer a future mission item',
-                **self._gps_snapshot_fields(),
-            )
-            return
         if current_seq != self.dynamic_indices['U']:
             if not self._set_dynamic_update_result('UPDATE_FAILED'):
                 return
@@ -1782,67 +2035,96 @@ class FcuInterfaceMavrosNode(Node):
             for wp in self.composite_expected_waypoints
         ]
         expected[r_seq] = self.clone_waypoint(dynamic_r)
+        with self._dynamic_state_lock:
+            self._dynamic_update_state = 'PUSHING'
+            self._dynamic_metrics['partial_push_attempt'] = 1
+            self._dynamic_metrics['partial_push_start_ms'] = (
+                time.monotonic() - started
+            ) * 1000.0
         self._publish_aburcd_event(
             'r_push_start',
             current_seq=current_seq,
             reached_seq=None,
             r_seq=r_seq,
+            partial_push_attempt=1,
+            partial_push_start_ms=self._dynamic_metrics['partial_push_start_ms'],
             **self._gps_snapshot_fields(),
         )
         push_started = time.monotonic()
-        await self.push_partial_mission_async(r_seq, dynamic_r)
+        try:
+            await self.push_partial_mission_async(
+                r_seq, dynamic_r, started_monotonic=started
+            )
+        except Exception as error:  # service failure leaves FCU R uncertain.
+            with self._dynamic_state_lock:
+                self._dynamic_metrics['partial_push_failure_reason'] = str(error)
+            await self._handle_dynamic_update_failure_async(
+                candidate,
+                started,
+                str(error),
+                calc_duration_ms=calc_duration_ms,
+            )
+            return
         push_duration_ms = (time.monotonic() - push_started) * 1000.0
+        with self._dynamic_state_lock:
+            self._dynamic_update_state = 'PUSH_ACKED'
+            self._dynamic_metrics['partial_push_ack_ms'] = (
+                time.monotonic() - started
+            ) * 1000.0
         self._publish_aburcd_event(
             'r_push_ack',
             current_seq=self._current_mission_seq(),
             reached_seq=None,
             r_seq=r_seq,
             push_duration_ms=push_duration_ms,
+            partial_push_attempt=1,
+            partial_push_ack_ms=self._dynamic_metrics['partial_push_ack_ms'],
             **self._gps_snapshot_fields(),
         )
-        if (
-            self._current_mission_seq() is None
-            or self._current_mission_seq() >= r_seq
-        ):
-            self._latch_dynamic_update_too_late(
-                'error_r_active_before_update_verified',
-                'R became current after partial-push ACK',
-                push_duration_ms=push_duration_ms,
-                **self._gps_snapshot_fields(),
-            )
-            return
+        self._require_dynamic_operation_allowed(started, 'before_pull_after_push')
+        with self._dynamic_state_lock:
+            self._dynamic_update_state = 'VERIFYING'
+            self._dynamic_metrics['pull_after_push_start'] = (
+                time.monotonic() - started
+            ) * 1000.0
+        self._publish_aburcd_event(
+            'r_pull_start',
+            pull_after_push_start=self._dynamic_metrics['pull_after_push_start'],
+            **self._gps_snapshot_fields(),
+        )
         verify_started = time.monotonic()
-        pulled = await self.pull_mission_async()
+        pulled = await self._pull_dynamic_mission_async(started)
         verify_duration_ms = (time.monotonic() - verify_started) * 1000.0
+        with self._dynamic_state_lock:
+            self._dynamic_metrics['pull_after_push_done'] = (
+                time.monotonic() - started
+            ) * 1000.0
+        self._publish_aburcd_event(
+            'r_pull_done',
+            pull_after_push_done=self._dynamic_metrics['pull_after_push_done'],
+            **self._gps_snapshot_fields(),
+        )
+        verify_cpu_started = time.monotonic()
         ok, verify_reason = self.verify_temporary_mission(
             expected, list(pulled.waypoints)
         )
+        verify_cpu_duration_ms = (
+            time.monotonic() - verify_cpu_started
+        ) * 1000.0
         current_seq = int(pulled.current_seq)
-        if self._dynamic_update_timed_out(started):
-            ok = False
-            verify_reason = 'dynamic_r_update_timeout'
         if not ok:
-            restored, restore_reason = await self._restore_safe_r_once_async(
-                r_seq
-            )
-            if not self._set_dynamic_update_result(
-                'R_SAFE_FALLBACK' if restored else 'UPDATE_FAILED'
-            ):
-                return
-            self._publish_aburcd_event(
-                'r_push_verify_failed',
-                current_seq=current_seq,
-                failure_reason=verify_reason,
-                fallback=(
-                    'R_safe restored'
-                    if restored
-                    else f'R_safe unconfirmed:{restore_reason}'
-                ),
+            await self._handle_dynamic_update_failure_async(
+                candidate,
+                started,
+                f'verify_failed:{verify_reason}',
+                calc_duration_ms=calc_duration_ms,
+                push_duration_ms=push_duration_ms,
                 verify_duration_ms=verify_duration_ms,
-                **self._gps_snapshot_fields(),
+                verify_cpu_duration_ms=verify_cpu_duration_ms,
             )
             return
 
+        self._require_dynamic_operation_allowed(started, 'final_verify_commit')
         self._commit_dynamic_r_verified(
             candidate=candidate,
             expected=expected,
@@ -1850,6 +2132,7 @@ class FcuInterfaceMavrosNode(Node):
             calc_duration_ms=calc_duration_ms,
             push_duration_ms=push_duration_ms,
             verify_duration_ms=verify_duration_ms,
+            verify_cpu_duration_ms=verify_cpu_duration_ms,
             verification_reason=verify_reason,
         )
 
@@ -1862,26 +2145,42 @@ class FcuInterfaceMavrosNode(Node):
         push_duration_ms,
         verify_duration_ms,
         verification_reason,
+        verify_cpu_duration_ms=0.0,
     ):
         """Atomically choose the only successful dynamic-R terminal path."""
         with self._dynamic_state_lock:
             # Fresh live-cache read: never use pulled.current_seq for this
             # final success decision.
-            live_current_seq = self._current_mission_seq()
+            deadline_reason, live_current_seq, reached_seq = (
+                self._dynamic_deadline_evidence_locked()
+            )
             if (
                 self._dynamic_update_result == 'UPDATE_TOO_LATE'
                 or self._r_active_before_verify_reported
+                or deadline_reason is not None
             ):
+                if deadline_reason in {
+                    'r_reached', 'raw_mission_current_r', 'mission_current_r'
+                }:
+                    self._dynamic_update_result = 'UPDATE_TOO_LATE'
+                    self._dynamic_update_state = 'TOO_LATE'
+                    self._dynamic_update_cancelled = True
+                    self._dynamic_worker_cancel_reason = deadline_reason
                 return False
-            if live_current_seq is None or live_current_seq >= int(
-                self.dynamic_indices['R']
-            ):
+            if self._dynamic_update_timed_out(started):
+                self._dynamic_update_state = 'FAILED'
+                self._dynamic_update_result = 'UPDATE_FAILED'
+                self._dynamic_update_cancelled = True
+                self._dynamic_worker_cancel_reason = 'dynamic_update_timeout'
+                return False
+            if live_current_seq is None:
                 self._dynamic_update_result = 'UPDATE_TOO_LATE'
+                self._dynamic_update_state = 'TOO_LATE'
                 self._r_active_before_verify_reported = True
                 self._publish_aburcd_event(
                     'error_r_active_before_update_verified',
                     current_seq=live_current_seq,
-                    reached_seq=None,
+                    reached_seq=reached_seq,
                     failure_reason=(
                         'final live current-seq check did not find R in future'
                     ),
@@ -1904,6 +2203,7 @@ class FcuInterfaceMavrosNode(Node):
                 if gps is not None else None
             )
             self._dynamic_update_result = 'DYNAMIC_R'
+            self._dynamic_update_state = 'VERIFIED'
             total_ms = (verified_at - started) * 1000.0
             # Publish before releasing the state lock, so MISSION_CURRENT_R
             # cannot be emitted first by waypoints_callback().
@@ -1914,6 +2214,9 @@ class FcuInterfaceMavrosNode(Node):
                 calc_duration_ms=calc_duration_ms,
                 push_duration_ms=push_duration_ms,
                 verify_duration_ms=verify_duration_ms,
+                verify_cpu_duration_ms=verify_cpu_duration_ms,
+                deadline_current_seq=live_current_seq,
+                deadline_last_reached_seq=reached_seq,
                 dynamic_update_total_ms=total_ms,
                 dynamic_r_lat=float(candidate['lat']),
                 dynamic_r_lon=float(candidate['lon']),
@@ -1922,29 +2225,154 @@ class FcuInterfaceMavrosNode(Node):
             )
             return True
 
-    async def _restore_safe_r_once_async(self, r_seq):
-        current_seq = self._current_mission_seq()
-        if current_seq is None or current_seq >= r_seq:
-            return False, 'restore_rejected_late'
-        if self.composite_safe_r_waypoint is None:
-            return False, 'safe_r_cache_missing'
-        if self.composite_expected_waypoints is None:
-            return False, 'expected_mission_cache_missing'
+    async def _pull_dynamic_mission_async(self, started):
+        self._require_dynamic_operation_allowed(started, 'pull')
+        remaining = self.dynamic_r_update_timeout_sec - (
+            time.monotonic() - started
+        )
+        return await self.pull_mission_async(
+            timeout_sec=max(0.05, remaining),
+            abort_check=lambda: self._dynamic_abort_reason(started),
+        )
+
+    def _classify_actual_r(self, pulled, dynamic_r):
+        if pulled is None or self.composite_expected_waypoints is None:
+            return 'R_ACTUAL_UNKNOWN', 'mission unavailable'
+        actual = list(pulled.waypoints)
+        safe_expected = [
+            self.clone_waypoint(wp) for wp in self.composite_expected_waypoints
+        ]
+        safe_expected[int(self.dynamic_indices['R'])] = self.clone_waypoint(
+            self.composite_safe_r_waypoint
+        )
+        safe_ok, safe_reason = self.verify_temporary_mission(safe_expected, actual)
+        if safe_ok:
+            return 'R_ACTUAL_SAFE', safe_reason
+        dynamic_expected = [self.clone_waypoint(wp) for wp in safe_expected]
+        dynamic_expected[int(self.dynamic_indices['R'])] = self.clone_waypoint(
+            dynamic_r
+        )
+        dynamic_ok, dynamic_reason = self.verify_temporary_mission(
+            dynamic_expected, actual
+        )
+        if dynamic_ok:
+            return 'R_ACTUAL_DYNAMIC', dynamic_reason
+        return (
+            'R_ACTUAL_UNKNOWN',
+            f'safe_mismatch={safe_reason};dynamic_mismatch={dynamic_reason}',
+        )
+
+    async def _handle_dynamic_update_failure_async(
+        self,
+        candidate,
+        started,
+        failure_reason,
+        **durations,
+    ):
+        r_seq = int(self.dynamic_indices['R'])
+        dynamic_r = self.make_nav_waypoint(
+            candidate['lat'], candidate['lon'], candidate['alt'],
+            self.c_acceptance_radius_m,
+        )
+        pulled = None
+        actual = 'R_ACTUAL_UNKNOWN'
+        actual_after_failure = actual
+        reconcile_reason = 'pull not attempted'
         try:
-            await self.push_partial_mission_async(
-                r_seq, self.composite_safe_r_waypoint
+            self._require_dynamic_operation_allowed(started, 'reconcile_pull')
+            pulled = await self._pull_dynamic_mission_async(started)
+            actual, reconcile_reason = self._classify_actual_r(pulled, dynamic_r)
+            actual_after_failure = actual
+        except Exception as error:  # cancellation/timeout/pull failure => unknown
+            reconcile_reason = str(error)
+
+        restore_attempted = False
+        restore_result = 'NOT_ATTEMPTED'
+        with self._dynamic_state_lock:
+            deadline_reason, _, _ = self._dynamic_deadline_evidence_locked()
+        if deadline_reason in {
+            'r_reached', 'raw_mission_current_r', 'mission_current_r'
+        }:
+            restore_result = 'R_SAFE_RESTORE_SKIPPED_TOO_LATE'
+        elif actual == 'R_ACTUAL_DYNAMIC':
+            with self._dynamic_state_lock:
+                deadline_reason, _, _ = self._dynamic_deadline_evidence_locked()
+            if deadline_reason:
+                restore_result = 'R_SAFE_RESTORE_SKIPPED_TOO_LATE'
+            else:
+                restore_attempted = True
+                try:
+                    self._require_dynamic_operation_allowed(
+                        started, 'fallback_push'
+                    )
+                    await self.push_partial_mission_async(
+                        r_seq,
+                        self.composite_safe_r_waypoint,
+                        started_monotonic=started,
+                    )
+                    restored_pull = await self._pull_dynamic_mission_async(started)
+                    restored_actual, restored_reason = self._classify_actual_r(
+                        restored_pull, dynamic_r
+                    )
+                    if restored_actual == 'R_ACTUAL_SAFE':
+                        restore_result = 'R_SAFE_RESTORED'
+                        actual = restored_actual
+                    else:
+                        restore_result = f'R_SAFE_RESTORE_UNVERIFIED:{restored_reason}'
+                except Exception as error:  # one attempt only
+                    restore_result = f'R_SAFE_RESTORE_FAILED:{error}'
+
+        terminal_result = (
+            'R_SAFE_FALLBACK'
+            if actual == 'R_ACTUAL_SAFE' else 'UPDATE_FAILED'
+        )
+        self._set_dynamic_update_result(terminal_result)
+        with self._dynamic_state_lock:
+            deadline_current_seq = self._current_mission_seq()
+            deadline_last_reached_seq = self.last_reached_seq
+            self._dynamic_metrics.update({
+                'partial_push_failure_reason': failure_reason,
+                'r_actual_after_failure': actual_after_failure,
+                'r_restore_attempted': restore_attempted,
+                'r_restore_result': restore_result,
+            })
+        self._publish_aburcd_event(
+            'r_push_failed',
+            failure_reason=failure_reason,
+            partial_push_failure_reason=failure_reason,
+            r_actual_after_failure=actual_after_failure,
+            reconciliation_reason=reconcile_reason,
+            r_restore_attempted=restore_attempted,
+            r_restore_result=restore_result,
+            deadline_current_seq=deadline_current_seq,
+            deadline_last_reached_seq=deadline_last_reached_seq,
+            **durations,
+            **self._gps_snapshot_fields(),
+        )
+
+    def _finish_dynamic_abort(self, reason, started):
+        with self._dynamic_state_lock:
+            deadline_reason, current_seq, reached_seq = (
+                self._dynamic_deadline_evidence_locked()
             )
-            pulled = await self.pull_mission_async()
-            expected = [
-                self.clone_waypoint(wp)
-                for wp in self.composite_expected_waypoints
-            ]
-            ok, reason = self.verify_temporary_mission(
-                expected, list(pulled.waypoints)
-            )
-            return ok, reason
-        except Exception as error:  # noqa: BLE001 - one rollback attempt only.
-            return False, str(error)
+            state = self._dynamic_update_state
+            cancel_reason = self._dynamic_worker_cancel_reason or reason
+        event = (
+            'error_r_active_before_update_verified'
+            if state == 'TOO_LATE' or deadline_reason in {
+                'r_reached', 'raw_mission_current_r', 'mission_current_r'
+            }
+            else 'dynamic_update_cancelled'
+        )
+        self._publish_aburcd_event(
+            event,
+            failure_reason=reason,
+            dynamic_worker_cancel_reason=cancel_reason,
+            dynamic_update_total_ms=(time.monotonic() - started) * 1000.0,
+            deadline_current_seq=current_seq,
+            deadline_last_reached_seq=reached_seq,
+            **self._gps_snapshot_fields(),
+        )
 
     def can_insert_release_command(self):
         """验证控制模式、独立开关及载荷参数。"""
@@ -2180,7 +2608,9 @@ class FcuInterfaceMavrosNode(Node):
     def clone_waypoint(wp):
         return copy.deepcopy(wp)
 
-    async def call_service_async(self, client, request, timeout_sec, name):
+    async def call_service_async(
+        self, client, request, timeout_sec, name, abort_check=None
+    ):
         if not client.wait_for_service(
             timeout_sec=self.service_availability_timeout_sec
         ):
@@ -2188,6 +2618,11 @@ class FcuInterfaceMavrosNode(Node):
         future = client.call_async(request)
         start_time = time.monotonic()
         while rclpy.ok() and not future.done():
+            if abort_check is not None:
+                abort_reason = abort_check()
+                if abort_reason:
+                    future.cancel()
+                    raise PartialUpdateAborted(f'{name}:{abort_reason}')
             if time.monotonic() - start_time > timeout_sec:
                 future.cancel()
                 raise TimeoutError(f'{name} request timed out.')
@@ -2268,8 +2703,10 @@ class FcuInterfaceMavrosNode(Node):
 
         return await self._retry_mission_service('WaypointPush', operation)
 
-    async def push_partial_mission_async(self, start_index, waypoint):
-        """Update exactly one future mission item through WaypointPush."""
+    async def push_partial_mission_async(
+        self, start_index, waypoint, started_monotonic=None
+    ):
+        """Update one item through the project-local raw MAVLink adapter."""
         if not self.allow_mission_upload:
             raise RuntimeError(
                 'Mission upload is disabled by allow_mission_upload.'
@@ -2280,47 +2717,60 @@ class FcuInterfaceMavrosNode(Node):
                 f'Invalid partial mission start_index={start_index}.'
             )
 
-        async def operation():
-            request = WaypointPush.Request()
-            request.start_index = start_index
-            request.waypoints = [self.clone_waypoint(waypoint)]
-            result = await self.call_service_async(
-                self.mission_push_client,
-                request,
-                self.service_timeout_sec,
-                'WaypointPushPartialR',
-            )
-            if not result.success:
-                raise RuntimeError(
-                    'WaypointPush partial R rejected. '
-                    f'transferred={result.wp_transfered}'
-                )
-            if int(result.wp_transfered) != 1:
-                raise RuntimeError(
-                    'WaypointPush partial R incomplete. '
-                    f'transferred={result.wp_transfered}, expected=1'
-                )
-            return result
-
-        return await self._retry_mission_service(
-            'WaypointPushPartialR', operation
+        started = (
+            time.monotonic()
+            if started_monotonic is None
+            else float(started_monotonic)
         )
+        self._require_dynamic_operation_allowed(started, 'partial_push')
+        remaining = self.dynamic_r_update_timeout_sec - (
+            time.monotonic() - started
+        )
+        transferred = await asyncio.to_thread(
+            self.partial_update_adapter.push_one,
+            start_index,
+            self.clone_waypoint(waypoint),
+            max(0.0, remaining),
+            lambda: self._dynamic_abort_reason(started),
+        )
+        if int(transferred) != 1:
+            raise RuntimeError(
+                f'partial adapter transferred={transferred}, expected=1'
+            )
+        return transferred
 
-    async def pull_mission_async(self):
+    async def pull_mission_async(
+        self, timeout_sec=None, abort_check=None
+    ):
         req = WaypointPull.Request()
-        self.current_waypoints = None
+        generation_before = getattr(self, '_waypoint_list_generation', 0)
+        effective_timeout = (
+            self.service_timeout_sec
+            if timeout_sec is None else max(0.05, float(timeout_sec))
+        )
         result = await self.call_service_async(
             self.mission_pull_client,
             req,
-            self.service_timeout_sec,
+            effective_timeout,
             'WaypointPull',
+            abort_check=abort_check,
         )
         if not result.success:
             raise RuntimeError('WaypointPull rejected.')
         expected_count = int(result.wp_received)
         start_time = time.time()
-        while time.time() - start_time < self.service_timeout_sec:
-            if self.current_waypoints is not None:
+        while time.time() - start_time < effective_timeout:
+            if abort_check is not None:
+                abort_reason = abort_check()
+                if abort_reason:
+                    raise PartialUpdateAborted(
+                        f'WaypointPullWait:{abort_reason}'
+                    )
+            if (
+                self.current_waypoints is not None
+                and getattr(self, '_waypoint_list_generation', 0)
+                > generation_before
+            ):
                 actual_count = len(self.current_waypoints.waypoints)
                 if actual_count == expected_count:
                     return self.current_waypoints
@@ -2694,9 +3144,15 @@ class FcuInterfaceMavrosNode(Node):
             )
         self.clear_residual_route_checks(clear_route=True)
         self._last_mission_current_seq = None
+        self._raw_mission_current_seq = None
         self._b_previous_signed_m = None
         self._b_crossing_triggered = False
         self._dynamic_update_started = False
+        self._dynamic_update_state = 'IDLE'
+        self._dynamic_update_cancelled = False
+        self._dynamic_worker_cancel_reason = None
+        self._dynamic_metrics = {}
+        self.b_frozen_snapshot = None
         self._dynamic_update_verified = False
         self._dynamic_update_verified_monotonic = None
         self._dynamic_update_verified_gps = None
