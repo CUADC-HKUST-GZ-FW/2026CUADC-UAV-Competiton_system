@@ -272,6 +272,7 @@ class FlightSummaryLoggerNode(Node):
         'second_full_pull_failed', 'dynamic_update_skipped',
         'dynamic_update_too_late', 'dynamic_mission_structure_mismatch',
         'mission_progress_recovery', 'mission_progress_unknown',
+        'mission_progress_check', 'mission_progress_safe', 'mission_progress_accepted',
         'mission_state_unknown', 'dynamic_mission_failed',
         'mission_current_a', 'a_reached', 'b_crossed', 'b_state_frozen',
         'r_calc_start', 'r_calc_done', 'r_calc_failed', 'second_full_push_start',
@@ -299,7 +300,8 @@ class FlightSummaryLoggerNode(Node):
         'verify_cpu_duration_ms', 'dynamic_full_update_total_ms',
         'current_seq_before_update', 'current_seq_after_update',
         'last_reached_seq_before_update', 'last_reached_seq_after_update',
-        'mission_state', 'r_source', 'reason', 'push_pass',
+        'mission_state', 'r_source', 'reason', 'push_pass', 'action',
+        'dynamic_update_state',
         'deadline_current_seq', 'deadline_last_reached_seq',
         'dynamic_worker_cancel_reason',
     )
@@ -308,7 +310,9 @@ class FlightSummaryLoggerNode(Node):
         'calc_duration_ms', 'push_duration_ms', 'verify_duration_ms',
         'dynamic_update_total_ms', 'r_commit_margin_sec',
         'r_commit_margin_m', 'failure_reason', 'mission_state', 'r_source',
-        'reason', 'dynamic_worker_cancel_reason',
+        'reason', 'dynamic_worker_cancel_reason', 'action', 'dynamic_update_state',
+        'current_seq_before_update', 'last_reached_seq_before_update',
+        'current_seq_after_update', 'last_reached_seq_after_update',
     )
 
     def _format_human_event(self, record):

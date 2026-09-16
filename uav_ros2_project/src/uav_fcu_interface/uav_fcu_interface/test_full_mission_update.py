@@ -312,3 +312,127 @@ def test_push_deadline_is_rechecked_after_waiting_for_service():
             node, list(node.safe_composite_mission), retry=False,
             started_monotonic=time.monotonic()))
     assert requests == []
+
+
+@pytest.mark.parametrize('before,after,reached_after', [(6, 6, 6), (6, 6, 5), (5, 6, 6)])
+def test_natural_progress_accepts_u_reached_during_second_full_pull(
+        before, after, reached_after):
+    import threading
+    node, events, calls = scenario(after=after, reached=5)
+    node.current_waypoints.current_seq = before
+    node._dynamic_update_started = True
+    node.log_state = 'EXECUTING'
+    pull = node.pull_mission_async
+    callback_errors = []
+
+    async def reached_during_pull(**kwargs):
+        # Reproduce the supplied SITL ordering on a real callback thread.
+        def callback():
+            try:
+                node.waypoint_reached_callback(SimpleNamespace(wp_seq=reached_after))
+            except Exception as error:
+                callback_errors.append(error)
+        thread = threading.Thread(target=callback)
+        thread.start()
+        thread.join(timeout=1)
+        assert not thread.is_alive()
+        assert callback_errors == []
+        return await pull(**kwargs)
+
+    node.pull_mission_async = reached_during_pull
+    run(node)
+    assert [name for name, _ in calls] == ['push', 'pull']
+    names = [name for name, _ in events]
+    assert not {'mission_progress_recovery', 'mission_progress_unknown',
+                'dynamic_mission_failed', 'dynamic_update_cancelled'} & set(names)
+    result = next(v for k, v in events if k == 'dynamic_mission_verified')
+    assert result['r_source'] == 'DYNAMIC'
+    assert result['current_seq_before_update'] == before
+    assert result['last_reached_seq_before_update'] == 5
+    assert result['current_seq_after_update'] == after
+    assert result['last_reached_seq_after_update'] == reached_after
+    assert any(k == 'mission_progress_safe'
+               and v['reason'] == 'r_still_future_natural_progress' for k, v in events)
+    assert any(k == 'mission_progress_accepted' and v['action'] == 'no_set_current'
+               for k, v in events)
+    node.waypoints_callback(SimpleNamespace(current_seq=7,
+                                            waypoints=node.current_waypoints.waypoints))
+    names = [k for k, _ in events]
+    order = ['second_full_verify_pass', 'mission_progress_check', 'mission_progress_safe',
+             'mission_progress_accepted', 'dynamic_mission_verified', 'mission_current_r']
+    assert [names.index(k) for k in order] == sorted(names.index(k) for k in order)
+
+
+@pytest.mark.parametrize('current,reached', [(7, 6), (7, 7), (8, 7), (6, 7)])
+def test_r_deadline_during_second_pull_remains_too_late(current, reached):
+    node, events, calls = scenario(after=current, reached=5)
+    node.current_waypoints.current_seq = 6
+    pull = node.pull_mission_async
+    async def advance(**kwargs):
+        with node._dynamic_state_lock:
+            node.last_reached_seq = reached
+        return await pull(**kwargs)
+    node.pull_mission_async = advance
+    run(node)
+    assert [k for k, _ in calls] == ['push', 'pull']
+    assert node._dynamic_update_result == 'UPDATE_TOO_LATE'
+    assert any(k == 'dynamic_update_too_late' for k, _ in events)
+    assert not node._dynamic_update_verified
+    assert not any(k == 'dynamic_mission_verified' for k, _ in events)
+
+
+def test_actual_current_regression_still_requires_recovery():
+    node, events, calls = scenario(after=2, reached=5)
+    node.current_waypoints.current_seq = 6
+    run(node)
+    assert calls[-1] == ('set_current', 6)
+    assert any(k == 'mission_progress_recovery' for k, _ in events)
+    assert not any(k == 'mission_progress_accepted' for k, _ in events)
+
+
+@pytest.mark.parametrize('reached_after_check,verified', [(6, True), (7, False)])
+def test_reached_between_progress_check_and_commit_is_rechecked(reached_after_check, verified):
+    node, events, _ = scenario(after=6, reached=5)
+    node.current_waypoints.current_seq = 6
+    commit = node._commit_dynamic_r_verified
+    def reached_then_commit(*args, **kwargs):
+        with node._dynamic_state_lock:
+            node.last_reached_seq = reached_after_check
+        return commit(*args, **kwargs)
+    node._commit_dynamic_r_verified = reached_then_commit
+    run(node)
+    assert node._dynamic_update_verified is verified
+    assert any(k == 'dynamic_mission_verified' for k, _ in events) is verified
+
+
+def test_progress_snapshot_and_deadline_use_shared_state_lock():
+    node, events, _ = scenario(after=6, reached=6)
+    node.current_waypoints.current_seq = 6
+    node._dynamic_metrics.update(current_seq_before_update=6,
+                                last_reached_seq_before_update=5)
+    current = node._current_mission_seq
+    reads = []
+    def locked_read():
+        assert node._dynamic_state_lock.locked()
+        reads.append(True)
+        return current()
+    node._current_mission_seq = locked_read
+    assert asyncio.run(node._check_dynamic_progress(time.monotonic()))
+    assert reads
+    check = next(v for k, v in events if k == 'mission_progress_check')
+    assert check['current_seq_after_update'] == check['last_reached_seq_after_update'] == 6
+    assert 'dynamic_update_state' in check
+
+
+def test_progress_logs_include_before_after_and_no_set_current():
+    from uav_bringup.flight_summary_logger_node import FlightSummaryLoggerNode
+    logger = FlightSummaryLoggerNode.__new__(FlightSummaryLoggerNode)
+    record = dict(event='mission_progress_check', current_seq_before_update=6,
+                  last_reached_seq_before_update=5, current_seq_after_update=6,
+                  last_reached_seq_after_update=6, r_seq=7)
+    text = logger._format_human_event(record)
+    for field, value in record.items():
+        if field != 'event':
+            assert f'{field}: {value}' in text
+    assert 'action: no_set_current' in logger._format_human_event(
+        dict(event='mission_progress_accepted', action='no_set_current'))

@@ -641,25 +641,29 @@ class FcuInterfaceMavrosNode(Node):
 
     def _dynamic_abort_reason(self, started_monotonic):
         with self._dynamic_state_lock:
-            reason, current_seq, reached_seq = self._dynamic_deadline_evidence_locked()
-            if reason:
-                if reason in {
-                    'r_reached', 'mission_current_r'
-                }:
-                    self._dynamic_update_result = 'UPDATE_TOO_LATE'
-                    self._dynamic_update_state = 'TOO_LATE'
-                    self._dynamic_update_cancelled = True
-                    self._dynamic_worker_cancel_reason = reason
-                return (
-                    f'{reason};deadline_current_seq={current_seq};'
-                    f'deadline_last_reached_seq={reached_seq}'
-                )
-            if self._dynamic_update_timed_out(started_monotonic):
-                self._dynamic_update_state = 'FAILED'
-                self._dynamic_update_result = 'UPDATE_FAILED'
+            return self._dynamic_abort_reason_locked(started_monotonic)
+
+    def _dynamic_abort_reason_locked(self, started_monotonic):
+        """Check deadline/state in the same lock scope as progress telemetry."""
+        reason, current_seq, reached_seq = self._dynamic_deadline_evidence_locked()
+        if reason:
+            if reason in {
+                'r_reached', 'mission_current_r'
+            }:
+                self._dynamic_update_result = 'UPDATE_TOO_LATE'
+                self._dynamic_update_state = 'TOO_LATE'
                 self._dynamic_update_cancelled = True
-                self._dynamic_worker_cancel_reason = 'dynamic_update_timeout'
-                return 'DYNAMIC_UPDATE_TIMEOUT'
+                self._dynamic_worker_cancel_reason = reason
+            return (
+                f'{reason};deadline_current_seq={current_seq};'
+                f'deadline_last_reached_seq={reached_seq}'
+            )
+        if self._dynamic_update_timed_out(started_monotonic):
+            self._dynamic_update_state = 'FAILED'
+            self._dynamic_update_result = 'UPDATE_FAILED'
+            self._dynamic_update_cancelled = True
+            self._dynamic_worker_cancel_reason = 'dynamic_update_timeout'
+            return 'DYNAMIC_UPDATE_TIMEOUT'
         return None
 
     def _require_dynamic_operation_allowed(self, started_monotonic, operation):
@@ -1975,40 +1979,57 @@ class FcuInterfaceMavrosNode(Node):
 
     async def _check_dynamic_progress(self, started, safe_content=False):
         metrics = self._dynamic_metrics
-        before = metrics['current_seq_before_update']
-        current = self._current_mission_seq()
-        reached = max(self.last_reached_seq,
-                      metrics['last_reached_seq_before_update'])
-        metrics.update(current_seq_after_update=current,
-                       last_reached_seq_after_update=reached)
-        if (before is None or current is None or before < 1 or current < 0
-                or current >= len(self._safe_composite_mission)):
-            return False
-        if not safe_content:
-            self._require_dynamic_operation_allowed(started, 'progress_check')
-        if current >= before and current > reached:
-            return True  # Natural progress: never SetCurrent backwards.
-        self._require_dynamic_operation_allowed(started, 'progress_check')
-        # A reset is only recoverable with explicit reached evidence.
-        resume = max(before, reached + 1, current)
-        if reached < 0 or not (reached < resume < self.dynamic_indices['R']):
-            return False
-        self._full_update_event('mission_progress_recovery', resume_seq=resume)
-        self._require_dynamic_operation_allowed(started, 'progress_recovery')
-        # Check live evidence again immediately before dispatch; no fixed seq.
-        resume = max(resume, self.last_reached_seq + 1,
-                     self._current_mission_seq() or 0)
-        if resume >= self.dynamic_indices['R']:
-            return False
+        with self._dynamic_state_lock:
+            before = metrics['current_seq_before_update']
+            current = self._current_mission_seq()
+            reached = max(self.last_reached_seq,
+                          metrics['last_reached_seq_before_update'])
+            r_seq = self.dynamic_indices['R']
+            metrics.update(current_seq_after_update=current,
+                           last_reached_seq_after_update=reached)
+            self._full_update_event('mission_progress_check',
+                                    dynamic_update_state=self._dynamic_update_state)
+            if not safe_content:
+                reason = self._dynamic_abort_reason_locked(started)
+                if reason:
+                    raise DynamicUpdateAborted(f'progress_check:{reason}')
+            if (before is None or current is None or before < 1 or current < 0
+                    or current >= len(self._safe_composite_mission)):
+                return False
+            # Reached(U) can arrive before the next MISSION_CURRENT. Equality
+            # is normal; only an actual decrease from before requires recovery.
+            r_still_future = current < r_seq and reached < r_seq
+            if current >= before and (
+                    r_still_future or (safe_content and current > reached)):
+                self._full_update_event(
+                    'mission_progress_safe',
+                    reason=('r_still_future_natural_progress' if r_still_future
+                            else 'safe_mission_natural_progress'))
+                self._full_update_event('mission_progress_accepted', action='no_set_current')
+                return True
+            if current >= before:
+                return False
+            reason = self._dynamic_abort_reason_locked(started)
+            if reason:
+                raise DynamicUpdateAborted(f'progress_recovery:{reason}')
+            # A genuine regression is recoverable only with reached evidence.
+            resume = max(before, reached + 1, current)
+            if reached < 0 or not (reached < resume < r_seq):
+                return False
+            self._full_update_event('mission_progress_recovery', resume_seq=resume)
         await self.set_current_mission_item_async(resume, dynamic_started=started)
         deadline = time.monotonic() + self.service_timeout_sec
         while time.monotonic() < deadline:
-            self._require_dynamic_operation_allowed(started, 'recovery_confirm')
-            current = self._current_mission_seq()
-            if current is not None and current >= resume and current > self.last_reached_seq:
-                metrics.update(current_seq_after_update=current,
-                               last_reached_seq_after_update=self.last_reached_seq)
-                return True
+            with self._dynamic_state_lock:
+                reason = self._dynamic_abort_reason_locked(started)
+                if reason:
+                    raise DynamicUpdateAborted(f'recovery_confirm:{reason}')
+                current = self._current_mission_seq()
+                reached = self.last_reached_seq
+                if current is not None and resume <= current < r_seq and reached < r_seq:
+                    metrics.update(current_seq_after_update=current,
+                                   last_reached_seq_after_update=reached)
+                    return True
             await asyncio.sleep(0.05)
         return False
 
@@ -2026,11 +2047,12 @@ class FcuInterfaceMavrosNode(Node):
             self._dynamic_manual_failure('SAFE', 'current sequence unavailable',
                                          'mission_progress_unknown')
             return
-        self._dynamic_metrics.update(
-            dynamic_trigger_timestamp=started, calc_duration_ms=calc_duration_ms,
-            current_seq_before_update=self._current_mission_seq(),
-            last_reached_seq_before_update=self.last_reached_seq,
-        )
+        with self._dynamic_state_lock:
+            self._dynamic_metrics.update(
+                dynamic_trigger_timestamp=started, calc_duration_ms=calc_duration_ms,
+                current_seq_before_update=self._current_mission_seq(),
+                last_reached_seq_before_update=self.last_reached_seq,
+            )
         self._require_dynamic_operation_allowed(started, 'second_full_push_dispatch')
         self._second_full_push_attempted = True
         self._dynamic_update_state = 'PUSHING'
@@ -2096,6 +2118,9 @@ class FcuInterfaceMavrosNode(Node):
             progress_ok = await self._check_dynamic_progress(
                 started, safe_content=state == 'SAFE')
         except DynamicUpdateAborted as error:
+            if self._dynamic_update_result == 'UPDATE_TOO_LATE':
+                self._full_update_event('dynamic_update_too_late',
+                                        mission_state=state, failure_reason=str(error))
             self._dynamic_manual_failure(state, str(error), 'mission_progress_unknown')
             return
         except Exception as error:
@@ -2150,6 +2175,8 @@ class FcuInterfaceMavrosNode(Node):
                     self._dynamic_update_state = 'TOO_LATE'
                     self._dynamic_update_cancelled = True
                     self._dynamic_worker_cancel_reason = deadline_reason
+                    self._full_update_event('dynamic_update_too_late',
+                                            failure_reason=deadline_reason)
                 return False
             if self._dynamic_update_timed_out(started):
                 self._dynamic_update_state = 'FAILED'
@@ -2157,16 +2184,20 @@ class FcuInterfaceMavrosNode(Node):
                 self._dynamic_update_cancelled = True
                 self._dynamic_worker_cancel_reason = 'dynamic_update_timeout'
                 return False
-            if live_current_seq is None or live_current_seq <= reached_seq:
-                self._dynamic_update_result = 'UPDATE_TOO_LATE'
-                self._dynamic_update_state = 'TOO_LATE'
-                self._r_active_before_verify_reported = True
+            # Reached may equal current while R is still future. Reject only
+            # missing/invalid telemetry or a new regression since progress check.
+            accepted_seq = self._dynamic_metrics.get('current_seq_after_update',
+                                                      live_current_seq)
+            if (live_current_seq is None or live_current_seq < 1
+                    or (accepted_seq is not None and live_current_seq < accepted_seq)):
+                self._dynamic_update_result = 'UPDATE_FAILED'
+                self._dynamic_update_state = 'FAILED'
                 self._publish_aburcd_event(
-                    'error_r_active_before_update_verified',
+                    'mission_progress_unknown',
                     current_seq=live_current_seq,
                     reached_seq=reached_seq,
                     failure_reason=(
-                        'final live current-seq check did not find R in future'
+                        'final live current-seq is missing or regressed'
                     ),
                     verify_duration_ms=verify_duration_ms,
                     **self._gps_snapshot_fields(),
@@ -2631,15 +2662,18 @@ class FcuInterfaceMavrosNode(Node):
         req.wp_seq = int(seq)
 
         def guard_recovery():
-            self._require_dynamic_operation_allowed(dynamic_started, 'set_current_dispatch')
-            current = self._current_mission_seq()
-            if current is None:
-                raise DynamicUpdateAborted('recovery current sequence unavailable')
-            if current >= req.wp_seq and current > self.last_reached_seq:
-                raise DynamicProgressRecovered()
-            req.wp_seq = max(req.wp_seq, current, self.last_reached_seq + 1)
-            if not self.last_reached_seq < req.wp_seq < self.dynamic_indices['R']:
-                raise DynamicUpdateAborted('no safe resume sequence before R')
+            with self._dynamic_state_lock:
+                reason = self._dynamic_abort_reason_locked(dynamic_started)
+                if reason:
+                    raise DynamicUpdateAborted(f'set_current_dispatch:{reason}')
+                current = self._current_mission_seq()
+                if current is None:
+                    raise DynamicUpdateAborted('recovery current sequence unavailable')
+                if current >= req.wp_seq:
+                    raise DynamicProgressRecovered()
+                req.wp_seq = max(req.wp_seq, current, self.last_reached_seq + 1)
+                if not self.last_reached_seq < req.wp_seq < self.dynamic_indices['R']:
+                    raise DynamicUpdateAborted('no safe resume sequence before R')
 
         try:
             result = await self.call_service_async(
