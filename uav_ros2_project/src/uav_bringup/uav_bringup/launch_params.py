@@ -43,16 +43,16 @@ COMMON_FCU_ARGUMENT_DEFAULTS = {
     'a_offset_m': '160.0',
     'b_offset_m': '110.0',
     # TEMPORARY TEST VALUE. Tune only after collecting update latency/margin.
-    'u_offset_m': '80.0',
+    'u_offset_m': '65.0',
     'release_offset_m': '56.0',
     'd_offset_m': '50.0',
 
     # Waypoint acceptance radii.
-    'a_acceptance_radius_m': '30.0',
+    'a_acceptance_radius_m': '20.0',
     'b_acceptance_radius_m': '15.0',
     'u_acceptance_radius_m': '15.0',
     'c_acceptance_radius_m': '8.0',
-    'd_acceptance_radius_m': '30.0',
+    'd_acceptance_radius_m': '20.0',
 
     # Observation-only A-B trajectory check values present in both profiles.
     'b_check_half_width_m': '17.0',
