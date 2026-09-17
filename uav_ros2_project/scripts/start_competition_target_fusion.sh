@@ -19,7 +19,7 @@ readonly WS_SETUP="${ROS_WS}/install/setup.bash"
 readonly MODE="${1:-}"
 readonly HEADING_INPUT="${2:-}"
 readonly REQUIRED_TARGETS=3
-readonly DEDUP_RADIUS_M=3.0
+readonly DEDUP_RADIUS_M=10.0
 readonly SETTLE_SEC=1.0
 readonly RUN_DIR="${ROOT}/run"
 readonly LOG_DIR="${ROOT}/logs/recon"
@@ -280,13 +280,18 @@ trap 'FAILURE_REASON="received_signal_TERM"; exit 143' TERM
 trap 'FAILURE_REASON="received_signal_HUP"; exit 129' HUP
 
 readonly STAMP="$(date +%Y%m%d_%H%M%S)"
-readonly SESSION_ID="${STAMP}_${MODE}_competition_fusion"
+readonly BOOT_ID_SHORT="$(cut -c1-8 /proc/sys/kernel/random/boot_id)"
+readonly PROCESS_START_TICKS="$(process_start_ticks "$$")"
+if [[ -z "${BOOT_ID_SHORT}" || -z "${PROCESS_START_TICKS}" ]]; then
+    fail "cannot construct a monotonic competition session identity"
+fi
+readonly SESSION_ID="${STAMP}_${BOOT_ID_SHORT}_${PROCESS_START_TICKS}_${MODE}_competition_fusion"
 readonly RESULT_DIR="${ROOT}/recon_results/sessions/${SESSION_ID}"
 readonly FLIGHT_LOG="${LOG_DIR}/flight_${SESSION_ID}.log"
 readonly VISION_LOG="${LOG_DIR}/vision_${SESSION_ID}.log"
 readonly RECON_LOG="${LOG_DIR}/ros_${SESSION_ID}.log"
 readonly SELECTOR_LOG="${LOG_DIR}/competition_selector_${SESSION_ID}.log"
-readonly BRIDGE_LOG="${LOG_DIR}/competition_target_fusion_bridge_${STAMP}.log"
+readonly BRIDGE_LOG="${LOG_DIR}/competition_target_fusion_bridge_${SESSION_ID}.log"
 readonly EVENT_LOG="${ROOT}/logs/recognition/recognition_events_${SESSION_ID}.jsonl"
 readonly ORCHESTRATOR_LOG="${LOG_DIR}/orchestrator_${SESSION_ID}.log"
 
@@ -392,6 +397,9 @@ if [[ "${mavros_count}" != "1" ]]; then
     fail "expected exactly one MAVROS process, found ${mavros_count}"
 fi
 
+if [[ -e "${RESULT_DIR}" ]]; then
+    fail "competition session directory already exists: ${RESULT_DIR}"
+fi
 mkdir -p "${RESULT_DIR}"
 echo "${MODE}" >"${ROOT}/configs/youth_runtime_mode.txt"
 ln -sfn "sessions/${SESSION_ID}" "${ROOT}/recon_results/latest"
@@ -403,7 +411,7 @@ if [[ "${YOUTH_SAVE_RAW_VIDEO:-1}" == "1" && -z "${YOUTH_RECORD_FILE:-}" ]]; the
     mkdir -p "${raw_dir}"
     available_kb="$(df -Pk "${raw_dir}" | awk 'NR==2 {print $4}')"
     if [[ -n "${available_kb}" && "${available_kb}" -ge "${YOUTH_RAW_MIN_FREE_KB:-2097152}" ]]; then
-        export YOUTH_RECORD_FILE="${raw_dir}/camera_${STAMP}_1440x1080_${MODE}_competition_fusion_raw_no_overlay.mp4"
+        export YOUTH_RECORD_FILE="${raw_dir}/camera_${SESSION_ID}_1440x1080_${MODE}_competition_fusion_raw_no_overlay.mp4"
         export YOUTH_RECORD_DURATION_SEC="${YOUTH_RECORD_DURATION_SEC:-600}"
         export YOUTH_RECORD_FPS="${YOUTH_RECORD_FPS:-60}"
         export YOUTH_RECORD_BITRATE_KBPS="${YOUTH_RECORD_BITRATE_KBPS:-12000}"

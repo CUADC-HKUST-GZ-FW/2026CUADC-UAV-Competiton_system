@@ -127,11 +127,43 @@ def cluster_records(records, radius_m):
     return groups
 
 
+def suppress_nearby_records(records, radius_m):
+    """Keep the strongest record and suppress every nearby weaker record.
+
+    Competition targets are known to be more than ``radius_m`` apart.  A
+    strongest-first pass therefore guarantees that every returned
+    representative is farther than the threshold from every other one.  This
+    is deliberately not transitive clustering: a weak coordinate chain must
+    not pull two genuinely separated targets into one group.
+    """
+    radius_m = max(0.0, radius_m)
+    representatives = []
+    suppressed = []
+    for record in sorted(records, key=quality_key, reverse=True):
+        nearby = [
+            (distance_m(record, kept), kept)
+            for kept in representatives
+            if distance_m(record, kept) <= radius_m
+        ]
+        if not nearby:
+            representatives.append(record)
+            continue
+
+        separation_m, kept = min(nearby, key=lambda item: item[0])
+        suppressed.append({
+            **record,
+            '_selection_reason': 'within_distinct_target_distance',
+            '_suppressed_by_target_id': kept['target_id'],
+            '_distance_m': separation_m,
+        })
+    return representatives, suppressed
+
+
 def choose_competition_target(
     records,
     mode,
     required_targets=3,
-    dedup_radius_m=3.0,
+    dedup_radius_m=10.0,
     allow_confirmed=False,
 ):
     accepted_statuses = {'finalized'}
@@ -152,10 +184,10 @@ def choose_competition_target(
             continue
         eligible.append({**record, 'competition_value': value})
 
-    spatial_representatives = [
-        max(group, key=quality_key)
-        for group in cluster_records(eligible, max(0.0, dedup_radius_m))
-    ]
+    spatial_representatives, suppressed = suppress_nearby_records(
+        eligible,
+        dedup_radius_m,
+    )
 
     # Competition rules guarantee three different non-empty labels. Treat a
     # repeated label as a duplicate track, even when coordinate scatter split
@@ -167,18 +199,31 @@ def choose_competition_target(
         current = representatives_by_value.get(value)
         if current is None or quality_key(record) > quality_key(current):
             if current is not None:
-                duplicate_labels.append(current)
+                duplicate_labels.append({
+                    **current,
+                    '_selection_reason': 'duplicate_competition_value',
+                    '_suppressed_by_target_id': record['target_id'],
+                })
             representatives_by_value[value] = record
         else:
-            duplicate_labels.append(record)
+            duplicate_labels.append({
+                **record,
+                '_selection_reason': 'duplicate_competition_value',
+                '_suppressed_by_target_id': current['target_id'],
+            })
 
     representatives = list(representatives_by_value.values())
     representatives.sort(key=quality_key, reverse=True)
+    ignored = suppressed + duplicate_labels
     if len(representatives) < required_targets:
-        return None, representatives, duplicate_labels
+        ignored.sort(key=quality_key, reverse=True)
+        return None, representatives, ignored
 
     candidates = representatives[:required_targets]
-    ignored = duplicate_labels + representatives[required_targets:]
+    ignored.extend({
+        **record,
+        '_selection_reason': 'lower_ranked_extra_candidate',
+    } for record in representatives[required_targets:])
     ignored.sort(key=quality_key, reverse=True)
     if mode == 'digit':
         selected = sorted(

@@ -48,6 +48,7 @@ class CompetitionSelector(Node):
         self.selection = None
         self.message = None
         self.last_signature = None
+        self.last_suppression_signature = None
         self.signature_since = time.monotonic()
         self.last_publish = 0.0
         self.publish_count = 0
@@ -65,7 +66,7 @@ class CompetitionSelector(Node):
             'Competition selector started '
             f'mode={self.mode} session={self.session_root} '
             f'required_nonempty_targets={self.required_targets} '
-            f'dedup_radius_m={self.dedup_radius_m:.2f} '
+            f'distinct_target_distance_m={self.dedup_radius_m:.2f} '
             f'accepted_statuses='
             f'{"finalized,confirmed" if self.allow_confirmed else "finalized"} '
             'flight_command_output=disabled'
@@ -124,6 +125,21 @@ class CompetitionSelector(Node):
             'status': record['status'],
         }
 
+    @classmethod
+    def public_suppressed_record(cls, record):
+        public = cls.public_record(record)
+        public['selection_reason'] = record.get(
+            '_selection_reason',
+            'not_selected',
+        )
+        if record.get('_suppressed_by_target_id'):
+            public['suppressed_by_target_id'] = record[
+                '_suppressed_by_target_id'
+            ]
+        if '_distance_m' in record:
+            public['distance_m'] = round(record['_distance_m'], 3)
+        return public
+
     def finalize(self, decision, representatives, ignored):
         selected = decision['selected']
         payload = {
@@ -135,13 +151,20 @@ class CompetitionSelector(Node):
             'selection_rule': decision['selection_rule'],
             'required_nonempty_targets': self.required_targets,
             'dedup_radius_m': self.dedup_radius_m,
+            'distinct_target_distance_m': self.dedup_radius_m,
             'selected_target': self.public_record(selected),
             'candidates_used': [
                 self.public_record(record) for record in decision['candidates']
             ],
-            'ignored_confirmed_candidates': [
-                self.public_record(record) for record in ignored
+            'suppressed_candidates': [
+                self.public_suppressed_record(record) for record in ignored
             ],
+            # Retained for older dashboard readers.  These are suppressed
+            # finalized candidates, not legacy confirmed-only results.
+            'ignored_confirmed_candidates': [
+                self.public_suppressed_record(record) for record in ignored
+            ],
+            'eligible_nonempty_targets': len(representatives),
             'confirmed_nonempty_clusters': len(representatives),
             'ros_interface': {
                 'topic': '/vision/competition_selected_target',
@@ -190,15 +213,47 @@ class CompetitionSelector(Node):
             self.allow_confirmed,
         )
         signature = tuple(
-            sorted((item['target_id'], item['label']) for item in representatives)
+            sorted(
+                (
+                    item['target_id'],
+                    item['label'],
+                    item['observation_count'],
+                    round(item['latitude'], 8),
+                    round(item['longitude'], 8),
+                )
+                for item in representatives
+            )
         )
         if signature != self.last_signature:
             self.last_signature = signature
             self.signature_since = time.monotonic()
             self.get_logger().info(
                 f'Competition eligible candidates={len(representatives)}/'
-                f'{self.required_targets} ids={signature}'
+                f'{self.required_targets} ids={signature} '
+                f'suppressed={len(ignored)}'
             )
+        suppression_signature = tuple(
+            sorted(
+                (
+                    record['target_id'],
+                    record.get('_selection_reason', 'not_selected'),
+                    record.get('_suppressed_by_target_id', '-'),
+                    round(record.get('_distance_m', -1.0), 3),
+                )
+                for record in ignored
+            )
+        )
+        if suppression_signature != self.last_suppression_signature:
+            self.last_suppression_signature = suppression_signature
+            for record in ignored:
+                self.get_logger().info(
+                    'Competition candidate suppressed '
+                    f'target_id={record["target_id"]} '
+                    f'label={record["label"]} '
+                    f'reason={record.get("_selection_reason", "not_selected")} '
+                    f'kept={record.get("_suppressed_by_target_id", "-")} '
+                    f'distance_m={record.get("_distance_m", float("nan")):.3f}'
+                )
         if decision is None:
             return
         if time.monotonic() - self.signature_since < self.settle_sec:
@@ -212,7 +267,7 @@ def parse_args():
     parser.add_argument('--mode', choices=('digit', 'image'), required=True)
     parser.add_argument('--session-root', type=Path, required=True)
     parser.add_argument('--required-targets', type=int, default=3)
-    parser.add_argument('--dedup-radius-m', type=float, default=3.0)
+    parser.add_argument('--dedup-radius-m', type=float, default=10.0)
     parser.add_argument('--settle-sec', type=float, default=1.0)
     parser.add_argument(
         '--allow-confirmed',

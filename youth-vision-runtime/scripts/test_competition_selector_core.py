@@ -3,6 +3,7 @@ from competition_selector_core import (
     cluster_records,
     distance_m,
     normalize_record,
+    suppress_nearby_records,
 )
 
 
@@ -174,6 +175,69 @@ def test_static_legacy_mode_can_explicitly_allow_confirmed_results():
     assert not ignored
     assert len(representatives) == 3
     assert decision['selected']['label'] == '52'
+
+
+def test_same_physical_target_with_label_flicker_counts_once():
+    metres_to_latitude = 1.0 / 111319.5
+    decision, representatives, ignored = choose_competition_target(
+        [
+            record('climb_packet', '25', 22.0, observations=36),
+            record(
+                'level_packet',
+                '52',
+                22.0 + 7.0 * metres_to_latitude,
+                observations=55,
+            ),
+            record('target_b', '69', 22.0 + 20.0 * metres_to_latitude),
+            record('target_c', '71', 22.0 + 40.0 * metres_to_latitude),
+        ],
+        'digit',
+    )
+    assert decision is not None
+    assert len(representatives) == 3
+    assert any(item['target_id'] == 'level_packet' for item in representatives)
+    assert not any(item['target_id'] == 'climb_packet' for item in representatives)
+    assert ignored[0]['_selection_reason'] == 'within_distinct_target_distance'
+    assert ignored[0]['_suppressed_by_target_id'] == 'level_packet'
+
+
+def test_nearby_suppression_keeps_representatives_pairwise_over_ten_metres():
+    metres_to_latitude = 1.0 / 111319.5
+    records = [
+        record('strong_a', '25', 22.0, observations=50),
+        record('weak_chain', '52', 22.0 + 7.0 * metres_to_latitude, observations=20),
+        record('target_b', '69', 22.0 + 14.0 * metres_to_latitude, observations=30),
+        record('target_c', '71', 22.0 + 30.0 * metres_to_latitude, observations=25),
+    ]
+    representatives, suppressed = suppress_nearby_records(records, 10.0)
+    assert len(representatives) == 3
+    assert [item['target_id'] for item in suppressed] == ['weak_chain']
+    assert all(
+        distance_m(left, right) > 10.0
+        for index, left in enumerate(representatives)
+        for right in representatives[index + 1:]
+    )
+
+
+def test_two_targets_plus_nearby_misclassification_cannot_finalize():
+    metres_to_latitude = 1.0 / 111319.5
+    decision, representatives, ignored = choose_competition_target(
+        [
+            record('target_a_best', '25', 22.0, observations=40),
+            record(
+                'target_a_wrong_label',
+                '52',
+                22.0 + 9.0 * metres_to_latitude,
+                observations=12,
+            ),
+            record('target_b', '69', 22.0 + 25.0 * metres_to_latitude),
+        ],
+        'digit',
+    )
+    assert decision is None
+    assert len(representatives) == 2
+    assert len(ignored) == 1
+    assert ignored[0]['target_id'] == 'target_a_wrong_label'
 
 
 if __name__ == '__main__':
