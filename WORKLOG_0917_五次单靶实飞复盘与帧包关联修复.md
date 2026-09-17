@@ -253,6 +253,7 @@ NX163 本轮取包算法部署前备份：
 
 ```text
 /home/nx163/uav_ros2_project/.codex_backups/20260917_2002_pixel_packet_v2/
+/home/nx163/uav_ros2_project/.codex_backups/20260917_2020_git_parity/
 ```
 
 此前同日 manifest、关停脚本和时钟修复也分别保留了时间戳备份。需要回退时应恢复
@@ -263,6 +264,17 @@ cd /home/nx163/uav_ros2_project
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install --packages-select uav_recon
 ```
+
+最终检查时 `youth-vision.service` 的 `ExecStart` 仍为
+`start_single_target_fusion.sh image 0.00`，但 unit 状态为 `disabled/inactive`。
+本次 SSH 账号对 `systemctl enable` 没有免密权限，因此没有擅自输入密码或绕过权限。
+需要恢复上电自启时在 NX163 交互终端执行：
+
+```bash
+sudo systemctl enable youth-vision.service
+```
+
+离线时钟 timer 当前为 `enabled/active/waiting`。
 
 ## 10. 下一次实飞验收重点
 
