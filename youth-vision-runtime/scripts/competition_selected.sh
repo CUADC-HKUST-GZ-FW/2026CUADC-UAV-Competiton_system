@@ -79,7 +79,7 @@ else
   fi
 
   sudo -n /usr/sbin/nvpmodel -m 0 >/dev/null
-  sudo -n /usr/bin/jetson_clocks >/dev/null
+  sudo -n /usr/bin/jetson_clocks --fan >/dev/null
 
   setsid env \
     YOUTH_SESSION_ID="$session_id" \
