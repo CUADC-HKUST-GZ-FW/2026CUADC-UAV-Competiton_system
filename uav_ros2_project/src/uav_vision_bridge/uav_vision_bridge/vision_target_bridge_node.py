@@ -26,6 +26,8 @@ class VisionTargetBridge(Node):
         self.declare_parameter('automation_step_timeout_sec', 8.0)
         self.declare_parameter('automation_total_timeout_sec', 30.0)
         self.declare_parameter('target_retry_interval_sec', 1.0)
+        self.declare_parameter('target_selection_candidate_count', 1)
+        self.declare_parameter('candidate_collection_timeout_sec', 0.0)
 
         self.heading_deg = float(self.get_parameter('heading_deg').value)
         self.source_topic = str(self.get_parameter('source_topic').value)
@@ -42,11 +44,31 @@ class VisionTargetBridge(Node):
             0.2,
             float(self.get_parameter('target_retry_interval_sec').value),
         )
+        self.selection_candidate_count = int(
+            self.get_parameter('target_selection_candidate_count').value
+        )
+        self.candidate_collection_timeout_sec = float(
+            self.get_parameter('candidate_collection_timeout_sec').value
+        )
 
         if not math.isfinite(self.heading_deg):
             raise ValueError('heading_deg must be finite')
+        if not 1 <= self.selection_candidate_count <= 20:
+            raise ValueError(
+                'target_selection_candidate_count must be between 1 and 20'
+            )
+        if (
+            not math.isfinite(self.candidate_collection_timeout_sec)
+            or self.candidate_collection_timeout_sec < 0.0
+        ):
+            raise ValueError(
+                'candidate_collection_timeout_sec must be finite and non-negative'
+            )
 
         self.pending_target = None
+        self.candidate_targets = []
+        self.candidate_target_ids = set()
+        self.candidate_collection_started_monotonic = 0.0
         self.target_published = False
         self.target_published_monotonic = 0.0
         self.target_publish_attempts = 0
@@ -86,7 +108,10 @@ class VisionTargetBridge(Node):
             f'auto_execute={str(self.auto_execute).lower()} '
             f'step_timeout_sec={self.step_timeout_sec:.1f} '
             f'total_timeout_sec={self.total_timeout_sec:.1f} '
-            f'retry_interval_sec={self.retry_interval_sec:.1f}'
+            f'retry_interval_sec={self.retry_interval_sec:.1f} '
+            f'selection_candidate_count={self.selection_candidate_count} '
+            f'candidate_collection_timeout_sec='
+            f'{self.candidate_collection_timeout_sec:.1f}'
         )
 
     @staticmethod
@@ -108,6 +133,52 @@ class VisionTargetBridge(Node):
             f'Automatic fusion phase old={previous} new={phase}'
         )
 
+    @staticmethod
+    def candidate_quality(result):
+        radius = float(result.horizontal_radius_95_m)
+        if not math.isfinite(radius) or radius < 0.0:
+            radius = float('inf')
+        confidence = float(result.confidence)
+        if not math.isfinite(confidence):
+            confidence = float('-inf')
+        return (
+            int(result.observation_count),
+            -radius,
+            confidence,
+        )
+
+    def select_strongest_candidate(self, reason):
+        if self.pending_target is not None or not self.candidate_targets:
+            return
+        selected_index, selected = max(
+            enumerate(self.candidate_targets),
+            key=lambda item: (self.candidate_quality(item[1]), item[0]),
+        )
+        rejected = [
+            candidate.target_id
+            for index, candidate in enumerate(self.candidate_targets)
+            if index != selected_index
+        ]
+        self.pending_target = selected
+        self.automation_started_monotonic = time.monotonic()
+        self.set_phase(
+            'waiting_for_standby'
+            if self.auto_execute
+            else 'manual_forward_pending'
+        )
+        self.get_logger().info(
+            'Selected strongest finalized recon target '
+            f'reason={reason} '
+            f'candidate_count={len(self.candidate_targets)} '
+            f'target_id={selected.target_id} '
+            f'label={selected.label} '
+            f'frames={selected.observation_count} '
+            f'r95_m={selected.horizontal_radius_95_m:.3f} '
+            f'confidence={selected.confidence:.6f} '
+            f'rejected_ids={rejected}'
+        )
+        self.publish_if_ready()
+
     def target_callback(self, result):
         if self.target_published or self.pending_target is not None:
             return
@@ -116,21 +187,31 @@ class VisionTargetBridge(Node):
         if not self.valid_coordinate(result.latitude, result.longitude):
             self.get_logger().warning('Finalized target has invalid coordinates')
             return
+        if result.target_id and result.target_id in self.candidate_target_ids:
+            self.get_logger().info(
+                'Ignored duplicate finalized recon target '
+                f'target_id={result.target_id}'
+            )
+            return
 
-        self.pending_target = result
-        self.automation_started_monotonic = time.monotonic()
-        self.set_phase(
-            'waiting_for_standby'
-            if self.auto_execute
-            else 'manual_forward_pending'
-        )
+        if result.target_id:
+            self.candidate_target_ids.add(result.target_id)
+        self.candidate_targets.append(result)
+        if self.candidate_collection_started_monotonic <= 0.0:
+            self.candidate_collection_started_monotonic = time.monotonic()
+        self.set_phase('collecting_candidates')
         self.get_logger().info(
-            'Accepted one finalized recon target '
+            'Collected finalized recon target '
             f'target_id={result.target_id} '
             f'label={result.label} '
-            f'confidence={result.confidence:.6f}'
+            f'frames={result.observation_count} '
+            f'r95_m={result.horizontal_radius_95_m:.3f} '
+            f'confidence={result.confidence:.6f} '
+            f'candidate_count={len(self.candidate_targets)}/'
+            f'{self.selection_candidate_count}'
         )
-        self.publish_if_ready()
+        if len(self.candidate_targets) >= self.selection_candidate_count:
+            self.select_strongest_candidate('required_candidate_count_reached')
 
     def mission_state_callback(self, message):
         self.mission_state = str(message.data)
@@ -158,12 +239,21 @@ class VisionTargetBridge(Node):
         )
 
     def drive_automation(self):
-        if not self.auto_execute or self.pending_target is None:
+        if not self.auto_execute:
+            return
+        now = time.monotonic()
+        if self.pending_target is None:
+            if (
+                self.candidate_targets
+                and self.candidate_collection_timeout_sec > 0.0
+                and now - self.candidate_collection_started_monotonic
+                >= self.candidate_collection_timeout_sec
+            ):
+                self.select_strongest_candidate('candidate_collection_timeout')
             return
         if self.automation_phase in self.TERMINAL_PHASES:
             return
 
-        now = time.monotonic()
         if self.total_timed_out(now):
             self.automation_failed(
                 f'total_timeout phase={self.automation_phase}'
