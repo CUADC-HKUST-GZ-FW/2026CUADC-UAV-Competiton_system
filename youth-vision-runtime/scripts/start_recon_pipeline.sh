@@ -66,6 +66,12 @@ fi
 sudo -n /usr/sbin/nvpmodel -m 0 >/dev/null
 sudo -n /usr/bin/jetson_clocks >/dev/null
 
+# The manifest is a one-frame handoff, not persistent reconnaissance history.
+# Remove the previous process's final frame before the new producer starts.
+startup_manifest="$ROOT/overlays/latest_crops/manifest_fast.json"
+rm -f -- "$startup_manifest"
+echo "startup_manifest_fence=armed path=$startup_manifest"
+
 setsid env \
   YOUTH_SESSION_ID="$session_id" \
   YOUTH_RECOGNITION_LOG="$event_log" \

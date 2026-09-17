@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly CLOCK_FILE="/var/lib/systemd/timesync/clock"
+readonly CLOCK_DIR="${CLOCK_FILE%/*}"
+# Refuse to persist an obviously invalid clock after an RTC-less cold boot.
+readonly MIN_VALID_EPOCH=1704067200  # 2024-01-01 00:00:00 UTC
+
+now_epoch="$(date +%s)"
+if (( now_epoch < MIN_VALID_EPOCH )); then
+    echo "[CLOCK] skip invalid system time: $(date --iso-8601=seconds)" >&2
+    exit 0
+fi
+
+previous_epoch=0
+if [[ -e "${CLOCK_FILE}" ]]; then
+    previous_epoch="$(stat -c %Y "${CLOCK_FILE}")"
+fi
+
+if (( now_epoch < previous_epoch )); then
+    echo "[CLOCK] refuse timestamp rollback: now=${now_epoch} saved=${previous_epoch}" >&2
+    exit 0
+fi
+
+install -d -o systemd-timesync -g systemd-timesync -m 0755 "${CLOCK_DIR}"
+if [[ ! -e "${CLOCK_FILE}" ]]; then
+    install -o systemd-timesync -g systemd-timesync -m 0644 /dev/null "${CLOCK_FILE}"
+fi
+
+touch -d "@${now_epoch}" "${CLOCK_FILE}"
+sync -f "${CLOCK_FILE}"

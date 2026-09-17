@@ -20,13 +20,15 @@ recon_results/current/
 Before flight, set real camera intrinsics, camera-to-FCU lever arm, and surveyed
 ground MSL altitude in `config/recon.yaml`.
 
-Flight mode uses `tracking_mode=pixel_packets`. Non-empty three-point Pose
-centres remain in one packet while detections are no more than 0.20 seconds
-apart and pass the time-scaled pixel gate, capped at 200 pixels. The finalized
-packet label is selected by valid-frame majority vote. Packets with
-10 or fewer valid frames are rejected. A packet group also closes immediately
-when any active packet reaches 300 valid frames. Once closed, packet coordinates
-are resolved as follows:
+Flight mode uses `tracking_mode=pixel_packets`. All non-empty three-point Pose
+centres from one frame are assigned to active tracks one-to-one without using
+the fluctuating class label. Association requires `dt <= 0.10 s` and
+`pixel_distance <= min(200, 50 + 1300 * dt)`. The surrounding packet group
+closes after 0.20 seconds without an active track, or immediately when any
+active packet reaches 300 valid frames. Each reassembled track then uses robust
+coordinate fusion and valid-frame majority voting; tracks with 10 or fewer
+valid frames are rejected. Once judged, packet coordinates are resolved as
+follows:
 
 - no more than 1.5 m apart: merge by valid frame count;
 - more than 1.5 m but less than 10 m apart: keep the larger packet;

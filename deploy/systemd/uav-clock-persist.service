@@ -1,0 +1,7 @@
+[Unit]
+Description=Persist a recent valid clock for offline Jetson boots
+After=time-set.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/uav-clock-persist

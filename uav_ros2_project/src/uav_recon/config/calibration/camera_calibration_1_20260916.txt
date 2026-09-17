@@ -1,0 +1,23 @@
+Camera calibration result
+Image size: 1440 x 1080 pixels
+Checkerboard: 11 x 8 inner corners
+Square size: 14.9 x 14.75 mm
+
+Camera matrix K (pixels):
+[1827.52061066, 0, 758.72082983]
+[0, 1838.51023114, 554.21732693]
+[0, 0, 1]
+
+Horizontal field of view: 43.006540 degrees
+Vertical field of view: 32.736723 degrees
+
+OpenCV distortion coefficients:
+k1=-0.06069567773
+k2=0.1550877485
+p1=-0.001554175908
+p2=-8.250286962e-05
+k3=0.06716819185
+
+Calibration RMS reprojection error: 0.094184 pixels
+Mean per-view reprojection error: 0.077804 pixels
+Used images: 47 / 73

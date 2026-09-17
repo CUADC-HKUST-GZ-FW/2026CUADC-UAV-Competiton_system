@@ -101,12 +101,14 @@ class ReconGeolocatorNode(Node):
             float(self.get_parameter('packet_pixel_gate_rate_px_per_sec').value),
             float(self.get_parameter('packet_pixel_gate_max_px').value),
             int(self.get_parameter('packet_max_observations').value),
+            float(self.get_parameter('packet_association_gap_sec').value),
         )
         self.final_target_count = 0
         self.packet_snapshot_scores = {}
         self.packet_clock_capture_time = None
         self.packet_clock_monotonic = None
         self.last_manifest_key = None
+        self._ignore_manifest_present_at_startup()
         self.pending_manifests = deque()
         self.last_status = None
         self.last_status_write = 0.0
@@ -217,7 +219,8 @@ class ReconGeolocatorNode(Node):
             'fixed_relative_altitude_m': 0.0,
             'tracking_mode': 'pixel_packets',
             'packet_gap_timeout_sec': 0.20,
-            'packet_pixel_gate_base_px': 25.0,
+            'packet_association_gap_sec': 0.10,
+            'packet_pixel_gate_base_px': 50.0,
             'packet_pixel_gate_rate_px_per_sec': 1300.0,
             'packet_pixel_gate_max_px': 200.0,
             'packet_max_observations': 300,
@@ -400,6 +403,21 @@ class ReconGeolocatorNode(Node):
             self.get_logger().warn(f'{status}: {detail or ""}')
         self.last_status = status
         self.last_status_write = now
+
+    def _ignore_manifest_present_at_startup(self):
+        """Fence off the last frame left by an earlier vision process."""
+        try:
+            with self.manifest_path.open('r', encoding='utf-8') as stream:
+                manifest = json.load(stream)
+            capture_ns = int(manifest.get('capture_timestamp_unix_ns', 0))
+            frame_number = int(manifest.get('frame', -1))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            return
+        self.last_manifest_key = (capture_ns, frame_number)
+        self.get_logger().info(
+            'ignored manifest present at startup: '
+            f'capture_ns={capture_ns} frame={frame_number}'
+        )
 
     def _poll_manifest(self):
         try:
@@ -654,6 +672,7 @@ class ReconGeolocatorNode(Node):
         if self.tracking_mode == 'pixel_packets':
             self._finalize_packet_groups(self.frame_packets.advance(capture_time))
         projected = 0
+        packet_observations = []
         frame_number = int(manifest.get('frame', -1))
         source_sequence = int(manifest.get('source_sequence', 0))
         for crop in manifest.get('crops', []):
@@ -699,13 +718,29 @@ class ReconGeolocatorNode(Node):
                 center_px=(float(center[0]), float(center[1])),
             )
             if self.tracking_mode == 'pixel_packets':
-                packet = self.frame_packets.add(observation)
-                self._preserve_packet_snapshot(packet.packet_id, observation)
+                packet_observations.append(observation)
             else:
                 track = self.tracks.add(observation)
                 self._write_track(track)
             projected += 1
         if self.tracking_mode == 'pixel_packets':
+            packets = self.frame_packets.add_frame(packet_observations)
+            for observation, packet, assignment in zip(
+                packet_observations,
+                packets,
+                self.frame_packets.last_assignments,
+            ):
+                self._preserve_packet_snapshot(packet.packet_id, observation)
+                if assignment['action'] == 'new_packet':
+                    self.get_logger().info(
+                        '[RECON_PACKET] stage=packet_started '
+                        f'packet_id={packet.packet_id} '
+                        f'reason={assignment["reason"]} '
+                        f'frame={observation.frame_number} '
+                        f'center=({observation.center_px[0]:.2f},'
+                        f'{observation.center_px[1]:.2f}) '
+                        f'detail={json.dumps(assignment, ensure_ascii=False)}'
+                    )
             self._finalize_packet_groups(
                 self.frame_packets.take_limit_reached_group()
             )
@@ -855,6 +890,15 @@ class ReconGeolocatorNode(Node):
                     ),
                     'gap_timeout_sec': float(
                         self.get_parameter('packet_gap_timeout_sec').value
+                    ),
+                    'association_gap_sec': float(
+                        self.get_parameter('packet_association_gap_sec').value
+                    ),
+                    'pixel_gate_base_px': float(
+                        self.get_parameter('packet_pixel_gate_base_px').value
+                    ),
+                    'pixel_gate_rate_px_per_sec': float(
+                        self.get_parameter('packet_pixel_gate_rate_px_per_sec').value
                     ),
                     'pixel_gate_max_px': float(
                         self.get_parameter('packet_pixel_gate_max_px').value

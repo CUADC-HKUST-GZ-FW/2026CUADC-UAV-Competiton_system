@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodically persist the Jetson system clock
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=1s
+Unit=uav-clock-persist.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

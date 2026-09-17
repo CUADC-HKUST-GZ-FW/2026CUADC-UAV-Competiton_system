@@ -8,16 +8,16 @@ recon_geolocator:
     result_write_hz: 20.0
     snapshot_write_hz: 5.0
 
-    # Checkerboard (Zhang Zhengyou) calibration for the 6 mm lens at 1440 x 1080.
-    # 52 of 100 images valid; OpenCV RMS reprojection error: 0.1371 px.
+    # Checkerboard calibration for the 6 mm lens at 1440 x 1080.
+    # 47 of 73 images valid; RMS 0.094184 px; mean per-view 0.077804 px.
     calibration_valid: true
     calibration_width: 1440
     calibration_height: 1080
-    fx: 1824.3503
-    fy: 1834.1137
-    cx: 758.9870
-    cy: 532.5906
-    distortion: [-0.07667293, 0.16476250, -0.00519511, 0.00167137, 0.17870528]
+    fx: 1827.52061066
+    fy: 1838.51023114
+    cx: 758.72082983
+    cy: 554.21732693
+    distortion: [-0.06069567773, 0.1550877485, -0.001554175908, -0.00008250286962, 0.06716819185]
 
     # Image top points toward the aircraft nose. The optical axis is 70 degrees
     # below horizontal, equivalent to 20 degrees forward from vertical-down.
@@ -53,11 +53,13 @@ recon_geolocator:
 
     # Flight mode: track non-empty three-point Pose centers in image time, then
     # select the finalized label by valid-frame majority vote.
-    # A gap over 0.20 s or movement outside the dynamic 200 px gate starts a
-    # new packet. Only packets with at least 11 unique frames can be finalized.
+    # Association uses at most 0.10 s between detections. The surrounding group
+    # closes after 0.20 s with no active track. Only reassembled tracks with at
+    # least 11 unique frames can be finalized.
     tracking_mode: pixel_packets
     packet_gap_timeout_sec: 0.20
-    packet_pixel_gate_base_px: 25.0
+    packet_association_gap_sec: 0.10
+    packet_pixel_gate_base_px: 50.0
     packet_pixel_gate_rate_px_per_sec: 1300.0
     packet_pixel_gate_max_px: 200.0
     packet_max_observations: 300

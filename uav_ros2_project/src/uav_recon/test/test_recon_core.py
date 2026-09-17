@@ -230,17 +230,18 @@ def fused_packet(packet_id, frame_count, east_m):
     return packet.fuse(0.10)
 
 
-def test_pixel_packet_manager_uses_dynamic_gate_and_020_second_timeout():
+def test_pixel_packet_manager_uses_dynamic_gate_and_separate_group_timeout():
     manager = PixelFramePacketManager(
         gap_timeout_sec=0.20,
-        pixel_gate_base_px=25.0,
+        pixel_gate_base_px=50.0,
         pixel_gate_rate_px_per_sec=1300.0,
         pixel_gate_max_px=200.0,
+        association_gap_sec=0.10,
     )
     first = manager.add(packet_observation(1.0, 1, (100.0, 100.0)))
     same = manager.add(packet_observation(1.05, 2, (185.0, 100.0)))
     assert same is first
-    assert manager.pixel_gate(0.05) == 90.0
+    assert manager.pixel_gate(0.05) == 115.0
 
     split = manager.add(packet_observation(1.10, 3, (390.0, 100.0)))
     assert split is not first
@@ -253,12 +254,67 @@ def test_pixel_packet_manager_uses_dynamic_gate_and_020_second_timeout():
     assert [len(packet.observations) for packet in groups[0].packets] == [2, 1]
 
 
+def test_pixel_packet_manager_splits_after_010_second_association_gap():
+    manager = PixelFramePacketManager(
+        gap_timeout_sec=0.20,
+        association_gap_sec=0.10,
+    )
+    first = manager.add(packet_observation(1.0, 1, (100.0, 100.0)))
+    split = manager.add(packet_observation(1.11, 2, (102.0, 100.0)))
+
+    assert split is not first
+    assert manager.last_assignments[0]['reason'] == 'association_gap_exceeded'
+    assert manager.advance(1.21) == []
+    groups = manager.advance(1.310001)
+    assert len(groups) == 1
+    assert [len(packet.observations) for packet in groups[0].packets] == [1, 1]
+
+
+def test_relaxed_gate_keeps_60_pixel_per_frame_flight_track_together():
+    manager = PixelFramePacketManager(
+        gap_timeout_sec=0.20,
+        association_gap_sec=0.10,
+        pixel_gate_base_px=50.0,
+        pixel_gate_rate_px_per_sec=1300.0,
+        pixel_gate_max_px=200.0,
+    )
+    packets = []
+    for index in range(14):
+        packets.append(manager.add(packet_observation(
+            1.0 + index / 60.0,
+            index,
+            (100.0 + 60.0 * index, 100.0),
+        )))
+
+    assert len({packet.packet_id for packet in packets}) == 1
+    assert len(packets[-1].observations) == 14
+
+
 def test_pixel_packet_manager_does_not_count_two_same_frame_detections_together():
     manager = PixelFramePacketManager()
-    left = manager.add(packet_observation(1.0, 10, (100.0, 100.0)))
-    right = manager.add(packet_observation(1.0, 10, (110.0, 100.0)))
+    left, right = manager.add_frame([
+        packet_observation(1.0, 10, (100.0, 100.0)),
+        packet_observation(1.0, 10, (110.0, 100.0)),
+    ])
     assert left is not right
     assert manager.active_packet_count == 2
+
+
+def test_pixel_packet_manager_assigns_two_targets_one_to_one():
+    manager = PixelFramePacketManager()
+    first_left, first_right = manager.add_frame([
+        packet_observation(1.0, 10, (100.0, 100.0)),
+        packet_observation(1.0, 10, (500.0, 100.0)),
+    ])
+    next_right, next_left = manager.add_frame([
+        packet_observation(1.02, 11, (490.0, 100.0)),
+        packet_observation(1.02, 11, (110.0, 100.0)),
+    ])
+
+    assert next_left is first_left
+    assert next_right is first_right
+    assert len(first_left.observations) == 2
+    assert len(first_right.observations) == 2
 
 
 def test_pixel_packet_manager_keeps_label_flicker_in_same_track():

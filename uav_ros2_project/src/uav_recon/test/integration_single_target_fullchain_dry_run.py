@@ -215,10 +215,10 @@ def main():
             '-p', 'calibration_valid:=true',
             '-p', 'calibration_width:=1440',
             '-p', 'calibration_height:=1080',
-            '-p', 'fx:=1824.3503',
-            '-p', 'fy:=1834.1137',
-            '-p', 'cx:=758.9870',
-            '-p', 'cy:=532.5906',
+            '-p', 'fx:=1827.52061066',
+            '-p', 'fy:=1838.51023114',
+            '-p', 'cx:=758.72082983',
+            '-p', 'cy:=554.21732693',
             '-p', 'camera_forward_tilt_deg:=20.0',
             '-p', 'camera_offset_flu_m:=[0.418,0.0,-0.09]',
             '-p', 'insert_wp_index:=5',
@@ -267,7 +267,7 @@ def main():
             for sequence in range(12):
                 refresh_manager_health(manager)
                 capture_ns = source.publish_telemetry()
-                spin_for(executor, 0.05)
+                spin_for(executor, 0.015)
                 manifest = {
                     'frame': sequence,
                     'capture_timestamp_unix_ns': capture_ns,
@@ -282,7 +282,7 @@ def main():
                         'rank': 0,
                         'detection_index': 0,
                         'src': 'crop_00.jpg',
-                        'center': [758.9870, 532.5906],
+                        'center': [758.72082983, 554.21732693],
                         'class_id': 85,
                         'class_label': '85',
                         'class_prob': 0.99,
@@ -290,7 +290,9 @@ def main():
                     }],
                 }
                 manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
-                spin_for(executor, 0.08)
+                # Keep the synthetic stream inside the production 0.10 s
+                # association window (roughly 22 FPS including executor work).
+                spin_for(executor, 0.03)
 
             # Real MAVROS telemetry continues after the target leaves frame.
             # Supply the same trailing sample so the final manifest can be
@@ -366,7 +368,7 @@ def main():
                     'label': '85',
                     'pose_score': 0.98,
                     'class_prob': 0.99,
-                    'pixel_center': [758.9870, 532.5906],
+                    'pixel_center': [758.72082983, 554.21732693],
                 },
                 'recon_geolocator': {
                     'finalized_count': len(finalized),

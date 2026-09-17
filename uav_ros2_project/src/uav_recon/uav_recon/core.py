@@ -539,12 +539,19 @@ class PixelFramePacketManager:
     def __init__(
         self,
         gap_timeout_sec: float = 0.20,
-        pixel_gate_base_px: float = 25.0,
+        pixel_gate_base_px: float = 50.0,
         pixel_gate_rate_px_per_sec: float = 1300.0,
         pixel_gate_max_px: float = 200.0,
         max_observations: int = 300,
+        association_gap_sec: Optional[float] = None,
     ):
         self.gap_timeout_sec = max(0.01, float(gap_timeout_sec))
+        if association_gap_sec is None:
+            association_gap_sec = self.gap_timeout_sec
+        self.association_gap_sec = min(
+            self.gap_timeout_sec,
+            max(0.01, float(association_gap_sec)),
+        )
         self.pixel_gate_base_px = max(0.0, float(pixel_gate_base_px))
         self.pixel_gate_rate_px_per_sec = max(0.0, float(pixel_gate_rate_px_per_sec))
         self.pixel_gate_max_px = max(1.0, float(pixel_gate_max_px))
@@ -553,6 +560,7 @@ class PixelFramePacketManager:
         self.pending: List[FramePacket] = []
         self.last_observation_timestamp: Optional[float] = None
         self.packet_counter = 0
+        self.last_assignments: List[dict] = []
 
     def pixel_gate(self, delta_sec: float) -> float:
         return min(
@@ -561,41 +569,175 @@ class PixelFramePacketManager:
             + self.pixel_gate_rate_px_per_sec * max(0.0, float(delta_sec)),
         )
 
-    def add(self, observation: Observation) -> FramePacket:
-        if len(observation.center_px) < 2:
-            raise ValueError('pixel packet observation requires center_px')
-        candidates = []
-        for packet in self.active:
-            if len(packet.observations) >= self.max_observations:
-                continue
+    @staticmethod
+    def _pixel_distance(observation: Observation, packet: FramePacket) -> float:
+        return math.hypot(
+            float(observation.center_px[0]) - float(packet.last_center_px[0]),
+            float(observation.center_px[1]) - float(packet.last_center_px[1]),
+        )
+
+    def _new_packet(self, observation: Observation) -> FramePacket:
+        self.packet_counter += 1
+        packet = FramePacket(
+            f'packet_{self.packet_counter:04d}',
+            str(observation.label),
+        )
+        self.active.append(packet)
+        return packet
+
+    def _new_packet_reason(self, observation: Observation, candidate_packet_ids):
+        if not self.active:
+            return 'no_active_packet', {}
+
+        available = [
+            packet
+            for packet in self.active
+            if len(packet.observations) < self.max_observations
+        ]
+        if not available:
+            return 'max_observations', {}
+
+        time_eligible = []
+        same_frame = []
+        for packet in available:
             delta_sec = observation.timestamp - packet.last_timestamp
-            if delta_sec < 0.0 or delta_sec > self.gap_timeout_sec:
+            if delta_sec < 0.0 or delta_sec > self.association_gap_sec:
                 continue
             if (
                 observation.frame_number >= 0
                 and packet.last_frame_number == observation.frame_number
             ):
+                same_frame.append(packet)
                 continue
-            distance_px = math.hypot(
-                float(observation.center_px[0]) - float(packet.last_center_px[0]),
-                float(observation.center_px[1]) - float(packet.last_center_px[1]),
-            )
+            distance_px = self._pixel_distance(observation, packet)
             gate_px = self.pixel_gate(delta_sec)
-            if distance_px <= gate_px:
-                candidates.append((distance_px / gate_px, distance_px, packet))
+            time_eligible.append((distance_px - gate_px, distance_px, gate_px, delta_sec, packet))
 
-        if candidates:
-            packet = min(candidates, key=lambda item: (item[0], item[1]))[2]
-        else:
-            self.packet_counter += 1
-            packet = FramePacket(
-                f'packet_{self.packet_counter:04d}',
-                str(observation.label),
+        if time_eligible:
+            excess_px, distance_px, gate_px, delta_sec, packet = min(
+                time_eligible,
+                key=lambda item: (item[0], item[1]),
             )
-            self.active.append(packet)
-        packet.add(observation)
-        self.last_observation_timestamp = observation.timestamp
-        return packet
+            if packet.packet_id in candidate_packet_ids:
+                reason = 'one_to_one_conflict'
+            else:
+                reason = 'pixel_gate_exceeded'
+            return reason, {
+                'previous_packet_id': packet.packet_id,
+                'delta_sec': delta_sec,
+                'distance_px': distance_px,
+                'gate_px': gate_px,
+                'excess_px': excess_px,
+            }
+        if same_frame:
+            return 'same_frame', {
+                'previous_packet_ids': [packet.packet_id for packet in same_frame],
+            }
+
+        nearest = min(
+            available,
+            key=lambda packet: abs(observation.timestamp - packet.last_timestamp),
+        )
+        return 'association_gap_exceeded', {
+            'previous_packet_id': nearest.packet_id,
+            'delta_sec': observation.timestamp - nearest.last_timestamp,
+            'association_gap_sec': self.association_gap_sec,
+        }
+
+    def add_frame(self, observations: Sequence[Observation]) -> List[FramePacket]:
+        """Assign one frame's detections to active packets one-to-one.
+
+        Matching is label agnostic. Global greedy assignment over normalized
+        pixel residuals prevents detection iteration order from attaching two
+        same-frame targets to one packet or stealing the nearest track.
+        """
+        observations = list(observations)
+        for observation in observations:
+            if len(observation.center_px) < 2:
+                raise ValueError('pixel packet observation requires center_px')
+        if not observations:
+            self.last_assignments = []
+            return []
+
+        edges = []
+        candidate_packet_ids = [set() for _ in observations]
+        for observation_index, observation in enumerate(observations):
+            for packet_index, packet in enumerate(self.active):
+                if len(packet.observations) >= self.max_observations:
+                    continue
+                delta_sec = observation.timestamp - packet.last_timestamp
+                if delta_sec < 0.0 or delta_sec > self.association_gap_sec:
+                    continue
+                if (
+                    observation.frame_number >= 0
+                    and packet.last_frame_number == observation.frame_number
+                ):
+                    continue
+                distance_px = self._pixel_distance(observation, packet)
+                gate_px = self.pixel_gate(delta_sec)
+                if distance_px <= gate_px:
+                    candidate_packet_ids[observation_index].add(packet.packet_id)
+                    edges.append((
+                        distance_px / gate_px,
+                        distance_px,
+                        observation_index,
+                        packet_index,
+                        delta_sec,
+                        gate_px,
+                    ))
+
+        matches = {}
+        used_packets = set()
+        for normalized, distance_px, observation_index, packet_index, delta_sec, gate_px in sorted(edges):
+            if observation_index in matches or packet_index in used_packets:
+                continue
+            matches[observation_index] = (
+                packet_index,
+                normalized,
+                distance_px,
+                delta_sec,
+                gate_px,
+            )
+            used_packets.add(packet_index)
+
+        assignments = []
+        details = []
+        for observation_index, observation in enumerate(observations):
+            match = matches.get(observation_index)
+            if match is None:
+                reason, detail = self._new_packet_reason(
+                    observation,
+                    candidate_packet_ids[observation_index],
+                )
+                packet = self._new_packet(observation)
+                details.append({
+                    'action': 'new_packet',
+                    'packet_id': packet.packet_id,
+                    'reason': reason,
+                    **detail,
+                })
+            else:
+                packet_index, normalized, distance_px, delta_sec, gate_px = match
+                packet = self.active[packet_index]
+                details.append({
+                    'action': 'matched',
+                    'packet_id': packet.packet_id,
+                    'delta_sec': delta_sec,
+                    'distance_px': distance_px,
+                    'gate_px': gate_px,
+                    'normalized_distance': normalized,
+                })
+            packet.add(observation)
+            assignments.append(packet)
+
+        self.last_assignments = details
+        self.last_observation_timestamp = max(
+            observation.timestamp for observation in observations
+        )
+        return assignments
+
+    def add(self, observation: Observation) -> FramePacket:
+        return self.add_frame([observation])[0]
 
     def advance(self, timestamp: float) -> List[FramePacketGroup]:
         still_active = []
