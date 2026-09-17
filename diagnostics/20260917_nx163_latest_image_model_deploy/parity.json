@@ -1,0 +1,151 @@
+{
+  "sample_count": 12,
+  "top1_matches": 12,
+  "maximum_abs_error": 0.02302473783493042,
+  "rows": [
+    {
+      "sample": "固定翼__d0829_090845_f002456__arrow01",
+      "truth": "固定翼",
+      "onnx_id": 2,
+      "onnx_label": "固定翼",
+      "onnx_score": 0.51359623670578,
+      "trt_id": 2,
+      "trt_label": "固定翼",
+      "trt_score": 0.5366209745407104,
+      "top1_match": true,
+      "max_abs_error": 0.02302473783493042
+    },
+    {
+      "sample": "固定翼__d0829_090845_f002482__arrow01",
+      "truth": "固定翼",
+      "onnx_id": 8,
+      "onnx_label": "直升机",
+      "onnx_score": 0.6008535623550415,
+      "trt_id": 8,
+      "trt_label": "直升机",
+      "trt_score": 0.5786129832267761,
+      "top1_match": true,
+      "max_abs_error": 0.02224057912826538
+    },
+    {
+      "sample": "固定翼__d0829_090845_f002485__arrow01",
+      "truth": "固定翼",
+      "onnx_id": 2,
+      "onnx_label": "固定翼",
+      "onnx_score": 0.9947041869163513,
+      "trt_id": 2,
+      "trt_label": "固定翼",
+      "trt_score": 0.9951170086860657,
+      "top1_match": true,
+      "max_abs_error": 0.00041282176971435547
+    },
+    {
+      "sample": "战斗机__d0829_090845_f005431__arrow02",
+      "truth": "战斗机",
+      "onnx_id": 5,
+      "onnx_label": "战斗机",
+      "onnx_score": 0.9857621192932129,
+      "trt_id": 5,
+      "trt_label": "战斗机",
+      "trt_score": 0.9863280057907104,
+      "top1_match": true,
+      "max_abs_error": 0.0005658864974975586
+    },
+    {
+      "sample": "战斗机__d0829_090845_f005439__arrow02",
+      "truth": "战斗机",
+      "onnx_id": 5,
+      "onnx_label": "战斗机",
+      "onnx_score": 0.9986832737922668,
+      "trt_id": 5,
+      "trt_label": "战斗机",
+      "trt_score": 0.9990230202674866,
+      "top1_match": true,
+      "max_abs_error": 0.00033974647521972656
+    },
+    {
+      "sample": "战斗机__d0829_090845_f005455__arrow01",
+      "truth": "战斗机",
+      "onnx_id": 5,
+      "onnx_label": "战斗机",
+      "onnx_score": 0.99842369556427,
+      "trt_id": 5,
+      "trt_label": "战斗机",
+      "trt_score": 0.9980469942092896,
+      "top1_match": true,
+      "max_abs_error": 0.00037670135498046875
+    },
+    {
+      "sample": "战斗机__d0829_090845_f005479__arrow01",
+      "truth": "战斗机",
+      "onnx_id": 5,
+      "onnx_label": "战斗机",
+      "onnx_score": 0.9997962117195129,
+      "trt_id": 5,
+      "trt_label": "战斗机",
+      "trt_score": 1.0,
+      "top1_match": true,
+      "max_abs_error": 0.00020378828048706055
+    },
+    {
+      "sample": "战斗机__d0829_090845_f005504__arrow01",
+      "truth": "战斗机",
+      "onnx_id": 5,
+      "onnx_label": "战斗机",
+      "onnx_score": 0.9998558759689331,
+      "trt_id": 5,
+      "trt_label": "战斗机",
+      "trt_score": 1.0,
+      "top1_match": true,
+      "max_abs_error": 0.00014412403106689453
+    },
+    {
+      "sample": "轰炸机__d0829_090845_f002482__arrow02",
+      "truth": "轰炸机",
+      "onnx_id": 9,
+      "onnx_label": "轰炸机",
+      "onnx_score": 0.9999966621398926,
+      "trt_id": 9,
+      "trt_label": "轰炸机",
+      "trt_score": 1.0,
+      "top1_match": true,
+      "max_abs_error": 3.337860107421875e-06
+    },
+    {
+      "sample": "轰炸机__d0829_090845_f002485__arrow02",
+      "truth": "轰炸机",
+      "onnx_id": 9,
+      "onnx_label": "轰炸机",
+      "onnx_score": 0.9999898672103882,
+      "trt_id": 9,
+      "trt_label": "轰炸机",
+      "trt_score": 1.0,
+      "top1_match": true,
+      "max_abs_error": 1.0132789611816406e-05
+    },
+    {
+      "sample": "轰炸机__d0829_090845_f002515__arrow01",
+      "truth": "轰炸机",
+      "onnx_id": 9,
+      "onnx_label": "轰炸机",
+      "onnx_score": 0.9999008178710938,
+      "trt_id": 9,
+      "trt_label": "轰炸机",
+      "trt_score": 1.0,
+      "top1_match": true,
+      "max_abs_error": 9.918212890625e-05
+    },
+    {
+      "sample": "轰炸机__d0829_090845_f002544__arrow01",
+      "truth": "轰炸机",
+      "onnx_id": 9,
+      "onnx_label": "轰炸机",
+      "onnx_score": 0.9999974966049194,
+      "trt_id": 9,
+      "trt_label": "轰炸机",
+      "trt_score": 1.0,
+      "top1_match": true,
+      "max_abs_error": 2.5033950805664062e-06
+    }
+  ]
+}

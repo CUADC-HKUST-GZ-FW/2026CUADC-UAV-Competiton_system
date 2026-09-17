@@ -164,3 +164,29 @@ if [[ -n "${YOUTH_RECORD_FILE:-}" ]]; then
 
   echo "record_content=raw_camera_frames_without_model_overlay"
 fi
+
+if [[ "${UAV_FOREGROUND:-0}" == "1" ]]; then
+  cleanup_foreground() {
+    trap - EXIT INT TERM HUP
+    "$ROOT/scripts/stop_recon_pipeline.sh" >/dev/null 2>&1 || true
+  }
+
+  trap cleanup_foreground EXIT
+  trap 'exit 0' INT TERM HUP
+  echo "foreground supervision enabled"
+
+  while true; do
+    for pid_file in \
+      "$RUN_DIR/recon_vision.pid" \
+      "$RUN_DIR/recon_ros.pid" \
+      "$RUN_DIR/competition_selector.pid"
+    do
+      child_pid="$(cat "$pid_file" 2>/dev/null || true)"
+      if [[ ! "$child_pid" =~ ^[0-9]+$ ]] || ! kill -0 "$child_pid" 2>/dev/null; then
+        echo "supervised process exited: $pid_file" >&2
+        exit 1
+      fi
+    done
+    sleep 2
+  done
+fi

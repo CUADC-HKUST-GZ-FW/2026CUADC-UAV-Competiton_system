@@ -25,6 +25,10 @@
 *.onnx
 *.weights
 
+# Curated, reviewed source artifacts may be committed under models/releases.
+!models/releases/**/*.pt
+!models/releases/**/*.onnx
+
 # Captures, telemetry and partial recordings
 *.mp4
 *.avi

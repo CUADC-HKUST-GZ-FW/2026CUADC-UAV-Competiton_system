@@ -14,7 +14,7 @@ mvs_gain: 6
 async_capture: true
 
 det_engine: /home/nx163/youth-vision-runtime/engines/arrow_pose_3pt_flightdomain_0902_branch_best_fp16_nx163.engine
-image_cls_engine: /home/nx163/youth-vision-runtime/engines/image_cls_fourway_balanced13_0903_night_v2_best_fp16_nx163.engine
+image_cls_engine: /home/nx163/youth-vision-runtime/engines/image_real_blank_gloo_best_fp16_nx163.engine
 digit_cls_engine: /home/nx163/youth-vision-runtime/engines/digit_cls_balanced101_0903_night_v2_best_fp16_nx163.engine
 
 image_labels: /home/nx163/youth-vision-runtime/configs/youth_classes_image.txt

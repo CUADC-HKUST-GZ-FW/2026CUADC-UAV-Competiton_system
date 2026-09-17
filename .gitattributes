@@ -10,4 +10,5 @@
 *.service text eol=lf
 *.md text eol=lf
 *.waypoints text eol=lf
-
+models/releases/**/*.pt binary
+models/releases/**/*.onnx binary

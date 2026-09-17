@@ -1,7 +1,7 @@
 # SHA-256, bytes, artifact path from NX163 active configuration
 bee278f60d091bdb18e2758ecd764b80fbeee4b3b7f562bff64755a6ef809ed6  /home/nx163/youth-vision-runtime/engines/arrow_pose_3pt_flightdomain_0902_branch_best_fp16_nx163.engine
 bytes=8478540 file=/home/nx163/youth-vision-runtime/engines/arrow_pose_3pt_flightdomain_0902_branch_best_fp16_nx163.engine
-86c840602eeab588ab60c6e8f9bb740fabda213f29b527a432a0db811d8ecea4  /home/nx163/youth-vision-runtime/engines/image_cls_fourway_balanced13_0903_night_v2_best_fp16_nx163.engine
-bytes=4202916 file=/home/nx163/youth-vision-runtime/engines/image_cls_fourway_balanced13_0903_night_v2_best_fp16_nx163.engine
+2a1ab4fcb6f7aa69a7a8400cefe143ca2dabf8ea834f2da30224c93818e49b75  /home/nx163/youth-vision-runtime/engines/image_real_blank_gloo_best_fp16_nx163.engine
+bytes=4366380 file=/home/nx163/youth-vision-runtime/engines/image_real_blank_gloo_best_fp16_nx163.engine
 fb1ef6594591a9f9ae683c3fd0e759f82d664c540ea4ebb6100e2c913c513e66  /home/nx163/youth-vision-runtime/engines/digit_cls_balanced101_0903_night_v2_best_fp16_nx163.engine
 bytes=4527108 file=/home/nx163/youth-vision-runtime/engines/digit_cls_balanced101_0903_night_v2_best_fp16_nx163.engine
