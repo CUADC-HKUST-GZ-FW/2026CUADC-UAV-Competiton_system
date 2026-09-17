@@ -51,7 +51,7 @@ class VisionTargetRetryTest(unittest.TestCase):
         target.status = 'finalized'
         return target
 
-    def use_two_candidate_selection(self, timeout_sec=25.0):
+    def use_two_candidate_selection(self, timeout_sec=10.0):
         self.node.destroy_node()
         self.node = VisionTargetBridge(
             parameter_overrides=[
@@ -124,10 +124,10 @@ class VisionTargetRetryTest(unittest.TestCase):
         self.assertEqual(0, self.node.target_publish_attempts)
 
     def test_candidate_collection_timeout_uses_best_available_final(self):
-        self.use_two_candidate_selection(timeout_sec=25.0)
+        self.use_two_candidate_selection(timeout_sec=10.0)
         target = self.finalized_target(target_id='target_001')
         self.node.target_callback(target)
-        self.node.candidate_collection_started_monotonic = time.monotonic() - 26.0
+        self.node.candidate_collection_started_monotonic = time.monotonic() - 11.0
 
         self.node.drive_automation()
 

@@ -434,7 +434,7 @@ recon_pid=$!
 register_child "${recon_pid}" "recon_geolocator" "${RUN_DIR}/recon_ros.pid"
 
 setsid bash -lc \
-    "source '${ROS_SETUP}'; source '${WS_SETUP}'; exec ros2 run uav_vision_bridge vision_target_bridge_node --ros-args -p heading_deg:='${HEADING_DEG}' -p auto_execute:=true -p target_selection_candidate_count:=2 -p candidate_collection_timeout_sec:=25.0" \
+    "source '${ROS_SETUP}'; source '${WS_SETUP}'; exec ros2 run uav_vision_bridge vision_target_bridge_node --ros-args -p heading_deg:='${HEADING_DEG}' -p auto_execute:=true -p target_selection_candidate_count:=2 -p candidate_collection_timeout_sec:=10.0" \
     >"${BRIDGE_LOG}" 2>&1 </dev/null {LOCK_FD}>&- &
 bridge_pid=$!
 register_child "${bridge_pid}" "vision_target_bridge" "${RUN_DIR}/single_target_fusion_bridge.pid"
