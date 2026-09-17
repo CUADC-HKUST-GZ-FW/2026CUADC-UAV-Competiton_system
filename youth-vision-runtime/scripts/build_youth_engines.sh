@@ -10,7 +10,7 @@ mkdir -p "$ROOT/engines"
   --saveEngine="$ROOT/engines/arrow_pose_1536_fp16.raw.engine" \
   --fp16 \
   --memPoolSize=workspace:2048 \
-  --builderOptimizationLevel=0
+  --builderOptimizationLevel=3
 
 "$TRTEXEC" \
   --onnx="$ROOT/onnx/digit_cls_128.onnx" \

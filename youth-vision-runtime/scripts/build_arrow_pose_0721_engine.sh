@@ -9,4 +9,4 @@ TRTEXEC="${TRTEXEC:-/usr/src/tensorrt/bin/trtexec}"
   --saveEngine="$ROOT/engines/arrow_pose_0721_1024x768_fp16.raw.engine" \
   --fp16 \
   --memPoolSize=workspace:2048 \
-  --builderOptimizationLevel=0
+  --builderOptimizationLevel=3

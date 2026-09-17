@@ -368,7 +368,12 @@ class ReconGeolocatorNode(Node):
     def _attitude_stream_rate_response(self, future):
         try:
             response = future.result()
-            self.attitude_stream_rate_configured = bool(response.success)
+            # Humble's mavros_msgs/StreamRate response is empty. Older MAVROS
+            # releases exposed a success field, so accept a completed empty
+            # response while still honoring that field when it exists.
+            self.attitude_stream_rate_configured = bool(
+                getattr(response, 'success', True)
+            )
             if self.attitude_stream_rate_configured:
                 self.get_logger().info(
                     f'FCU attitude stream requested at '

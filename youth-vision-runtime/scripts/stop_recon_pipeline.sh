@@ -145,9 +145,9 @@ stop_lock_owner
 # Legacy standalone recon/web entry points do not have a supervising parent.
 stop_group "${RUN_DIR}/recon_web.pid" 'live_capture_server\.py'
 stop_group "${RUN_DIR}/recon_results_dashboard.pid" 'recon_results_dashboard\.py'
-stop_group "${RUN_DIR}/competition_selector.pid" 'competition_selected\.sh'
+stop_group "${RUN_DIR}/competition_selector.pid" 'competition_selector\.py|competition_selected\.sh'
 stop_group "${RUN_DIR}/single_target_fusion_bridge.pid" 'vision_target_bridge'
-stop_group "${RUN_DIR}/recon_ros.pid" 'recon_geolocator|recon\.launch\.py'
+stop_group "${RUN_DIR}/recon_ros.pid" 'recon_geolocator|recon(_with_mavros|_static_with_mavros)?\.launch\.py'
 stop_group "${RUN_DIR}/recon_vision.pid" 'youth_vision_runner'
 stop_group "${RUN_DIR}/manual_flight_bringup.pid" 'start_uav\.sh|uav_bringup|real_bringup\.launch\.py'
 
