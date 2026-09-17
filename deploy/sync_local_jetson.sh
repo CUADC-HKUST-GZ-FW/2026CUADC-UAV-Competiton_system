@@ -51,11 +51,28 @@ fi
 
 camera_serial=""
 active_vision_config="${VISION_DEST}/configs/youth_pipeline.yaml"
+vision_engine_keys=(
+    det_engine
+    image_cls_engine
+    digit_cls_engine
+)
+declare -A vision_engine_values=()
 if [[ -f "${active_vision_config}" ]]; then
     camera_serial="$(
         sed -n 's/^[[:space:]]*mvs_serial:[[:space:]]*//p' \
             "${active_vision_config}" | head -n 1
     )"
+    for key in "${vision_engine_keys[@]}"; do
+        value="$(
+            sed -n "s/^[[:space:]]*${key}:[[:space:]]*//p" \
+                "${active_vision_config}" | head -n 1
+        )"
+        if [[ -n "${value}" && -f "${value}" ]]; then
+            vision_engine_values["${key}"]="${value}"
+        elif [[ -n "${value}" ]]; then
+            echo "[WARN] active ${key} does not exist and will not be preserved: ${value}" >&2
+        fi
+    done
 fi
 
 # Camera calibration and installation geometry belong to the physical device.
@@ -178,6 +195,20 @@ if [[ -n "${camera_serial}" && -f "${active_vision_config}" ]]; then
         "${active_vision_config}"
 fi
 
+# TensorRT plans are built for the local Jetson and are intentionally excluded
+# from rsync. Keep every valid active engine path instead of replacing it with
+# the NX163 source basename.
+if [[ -f "${active_vision_config}" ]]; then
+    for key in "${vision_engine_keys[@]}"; do
+        if [[ -v "vision_engine_values[${key}]" ]]; then
+            value="${vision_engine_values[${key}]}"
+            sed -i \
+                "s#^\([[:space:]]*${key}:[[:space:]]*\).*#\1${value}#" \
+                "${active_vision_config}"
+        fi
+    done
+fi
+
 if [[ -f "${active_recon_config}" ]]; then
     for key in "${hardware_recon_keys[@]}"; do
         if [[ -v "hardware_recon_values[${key}]" ]]; then
@@ -200,5 +231,5 @@ EOF
 
 echo "[OK] live directories updated from ${COMMIT}."
 echo "[OK] overwritten files backed up under ${BACKUP_ROOT}."
-echo "[OK] device camera serial, intrinsics, distortion, and extrinsics preserved."
+echo "[OK] device camera serial, TensorRT engine paths, intrinsics, distortion, and extrinsics preserved."
 echo "[NEXT] rebuild uav_ros2_project and run the approved dry-run checks."
