@@ -536,6 +536,25 @@ None of these messages proves that a physical servo moved or that the release
 mechanism opened. Physical success requires independent hardware/mechanical
 feedback.
 
+When release PWM confirmation starts, the monitor now caches the aircraft GPS
+from the first sample inside the release range. The summary produced after the
+configured consecutive samples includes the first-sample position, confirmation
+position, and confirmation duration. The three-sample confirmation rule itself
+is unchanged.
+
+For repeated standalone servo-open tests, stop other MAVROS/bringup modes and
+start the self-contained read-only test entry point:
+
+```bash
+/home/nx163/uav_ros2_project/scripts/start_servo_open_test.sh 7
+```
+
+This command starts MAVROS plus the logger, but no mission manager,
+reconnaissance, mission upload, mode-change, or actuator-control node. It
+requires a confirmed close before the first open and before every subsequent
+open. Results are written below `~/uav_flight_logs/servo_open_test/`. See
+`scripts/SERVO_OPEN_TEST.md` for the fields and direct launch command.
+
 Configuration is in `src/uav_payload/config/payload_monitor.yaml`. The SITL
 bringup launch starts the monitor automatically. Its diagnostics are published
 on `/payload/monitor/status`; inspect them with:

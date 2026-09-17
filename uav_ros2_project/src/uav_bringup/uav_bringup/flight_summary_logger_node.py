@@ -393,12 +393,47 @@ class FlightSummaryLoggerNode(Node):
             if record.get('observed_pwm') is not None:
                 lines.append(f'  PWM: {record.get("observed_pwm")}')
 
+            if record.get('candidate_first_pwm') is not None:
+                lines.append(
+                    f'  first release-range PWM: '
+                    f'{record.get("candidate_first_pwm")}'
+                )
+            duration_ms = record.get('confirmation_duration_ms')
+            if isinstance(duration_ms, (int, float)) and math.isfinite(
+                float(duration_ms)
+            ):
+                lines.append(f'  confirmation duration: {float(duration_ms):.1f} ms')
+
+            open_gps = record.get('open_gps')
+            if isinstance(open_gps, dict):
+                if (
+                    open_gps.get('latitude') is not None
+                    and open_gps.get('longitude') is not None
+                ):
+                    lines.extend([
+                        f'  opening lat: {float(open_gps["latitude"]):.7f}',
+                        f'  opening lon: {float(open_gps["longitude"]):.7f}',
+                    ])
+                lines.append(
+                    '  opening GPS valid: '
+                    f'{"YES" if open_gps.get("valid") else "NO"}'
+                )
+                if isinstance(open_gps.get('age_ms'), (int, float)):
+                    lines.append(
+                        f'  opening GPS age: {float(open_gps["age_ms"]):.1f} ms'
+                    )
+
             gps = record.get('gps')
             if isinstance(gps, dict):
                 if gps.get('latitude') is not None and gps.get('longitude') is not None:
+                    gps_label = (
+                        'confirmed'
+                        if event == 'payload_release_confirmed'
+                        else 'aircraft'
+                    )
                     lines.extend([
-                        f'  aircraft lat: {float(gps["latitude"]):.7f}',
-                        f'  aircraft lon: {float(gps["longitude"]):.7f}',
+                        f'  {gps_label} lat: {float(gps["latitude"]):.7f}',
+                        f'  {gps_label} lon: {float(gps["longitude"]):.7f}',
                     ])
 
             r_point = record.get('r_point')
@@ -867,6 +902,14 @@ class FlightSummaryLoggerNode(Node):
         self._payload_flags['pwm_confirmed'] = True
 
         gps = self._gps_sample()
+        open_gps = {
+            'latitude': self._coerce_value(values.get('open_latitude')),
+            'longitude': self._coerce_value(values.get('open_longitude')),
+            'altitude_m': self._coerce_value(values.get('open_altitude_m')),
+            'age_ms': self._coerce_value(values.get('open_gps_age_ms')),
+            'valid': str(values.get('open_gps_valid', '')).strip().lower()
+            in {'true', '1', 'yes'},
+        }
         self.write_event(
             'payload_release_confirmed',
             release_command_seq=self._coerce_value(
@@ -878,6 +921,13 @@ class FlightSummaryLoggerNode(Node):
             observed_pwm=self._coerce_value(
                 values.get('observed_pwm')
             ),
+            candidate_first_pwm=self._coerce_value(
+                values.get('candidate_first_pwm')
+            ),
+            confirmation_duration_ms=self._coerce_value(
+                values.get('confirmation_duration_ms')
+            ),
+            open_gps=open_gps,
             gps=gps,
             r_point=dict(self.r_point) if self.r_point is not None else None,
             distance_to_r_m=self._distance_from_gps_to_r(gps),

@@ -77,6 +77,9 @@ class PayloadMonitor:
         self.last_rc_out_time = None
         self.observed_pwm = None
         self.consecutive_pwm_matches = 0
+        self.pwm_candidate_started_at = None
+        self.pwm_candidate_first_value = None
+        self.pwm_confirmation_duration_s = None
         self.monitor_start_time = None
         self.execution_start_time = None
         self._mission_signature = None
@@ -130,6 +133,9 @@ class PayloadMonitor:
         self.last_rc_out_time = None
         self.observed_pwm = None
         self.consecutive_pwm_matches = 0
+        self.pwm_candidate_started_at = None
+        self.pwm_candidate_first_value = None
+        self.pwm_confirmation_duration_s = None
         self.monitor_start_time = None
         self.execution_start_time = None
         self._mission_signature = None
@@ -152,6 +158,9 @@ class PayloadMonitor:
         self.last_rc_out_time = None
         self.observed_pwm = None
         self.consecutive_pwm_matches = 0
+        self.pwm_candidate_started_at = None
+        self.pwm_candidate_first_value = None
+        self.pwm_confirmation_duration_s = None
         # 当前接口没有可靠的“开始上传”只读事件，因此不能从收到任务ID起误算上传超时。
         self.monitor_start_time = None
         self.execution_start_time = None
@@ -213,6 +222,9 @@ class PayloadMonitor:
             self.release_pwm_confirmed = False
             self.last_current_seq = None
             self.consecutive_pwm_matches = 0
+            self.pwm_candidate_started_at = None
+            self.pwm_candidate_first_value = None
+            self.pwm_confirmation_duration_s = None
             self.monitor_start_time = now
             self.execution_start_time = None
             self.execution_window_armed = False
@@ -323,11 +335,39 @@ class PayloadMonitor:
             return reached_events
 
         if matched:
+            if self.consecutive_pwm_matches == 0:
+                self.pwm_candidate_started_at = now
+                self.pwm_candidate_first_value = self.observed_pwm
+                reached_events.append(MonitorEvent(
+                    'info',
+                    self.state,
+                    'PWM release candidate started '
+                    f'channel={self.config.servo_channel} '
+                    f'observed={self.observed_pwm}',
+                    'pwm_candidate_started',
+                ))
             self.consecutive_pwm_matches += 1
         else:
+            if self.consecutive_pwm_matches > 0:
+                reached_events.append(MonitorEvent(
+                    'warning',
+                    self.state,
+                    'PWM release candidate rejected '
+                    f'channel={self.config.servo_channel} '
+                    f'observed={self.observed_pwm} '
+                    f'matched_samples={self.consecutive_pwm_matches}',
+                    'pwm_candidate_rejected',
+                ))
             self.consecutive_pwm_matches = 0
+            self.pwm_candidate_started_at = None
+            self.pwm_candidate_first_value = None
+            self.pwm_confirmation_duration_s = None
 
         if self.consecutive_pwm_matches >= self.config.required_consecutive_samples:
+            self.pwm_confirmation_duration_s = max(
+                0.0,
+                now - self.pwm_candidate_started_at,
+            )
             self.release_pwm_confirmed = True
             self.release_confirmed_latched = True
             self.state = PayloadMonitorState.PWM_CONFIRMED
@@ -335,7 +375,8 @@ class PayloadMonitor:
                 'pwm_confirmed', 'info',
                 f'channel {self.config.servo_channel} PWM confirmed '
                 f'expected={self.config.release_pwm} observed={self.observed_pwm} '
-                f'samples={self.consecutive_pwm_matches}'
+                f'samples={self.consecutive_pwm_matches} '
+                f'duration_ms={self.pwm_confirmation_duration_s * 1000.0:.1f}'
             ))
         return reached_events
 

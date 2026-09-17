@@ -147,6 +147,10 @@ class PayloadMonitorTest(unittest.TestCase):
         for now in (1.2, 1.3, 1.4):
             events.extend(monitor.observe_rc_out([1500] * 6 + [1900], now))
         self.assertTrue(monitor.release_pwm_confirmed)
+        self.assertEqual(1.2, monitor.pwm_candidate_started_at)
+        self.assertAlmostEqual(0.2, monitor.pwm_confirmation_duration_s)
+        self.assertEqual(1900, monitor.pwm_candidate_first_value)
+        self.assertIn('pwm_candidate_started', [event.key for event in events])
         self.assertIn('pwm_confirmed', [event.key for event in events])
 
     def test_mismatch_resets_consecutive_count(self):
@@ -154,9 +158,12 @@ class PayloadMonitorTest(unittest.TestCase):
         monitor.observe_mission(mission(), 4, 1.0)
         monitor.observe_waypoint_reached(4, 1.1)
         monitor.observe_rc_out([1500] * 6 + [1900], 1.2)
-        monitor.observe_rc_out([1500] * 7, 1.3)
-        monitor.observe_rc_out([1500] * 6 + [1900], 1.4)
+        rejected = monitor.observe_rc_out([1500] * 7, 1.3)
+        restarted = monitor.observe_rc_out([1500] * 6 + [1900], 1.4)
         self.assertEqual(1, monitor.consecutive_pwm_matches)
+        self.assertIn('pwm_candidate_rejected', [event.key for event in rejected])
+        self.assertIn('pwm_candidate_started', [event.key for event in restarted])
+        self.assertEqual(1.4, monitor.pwm_candidate_started_at)
 
     def test_pwm_confirmation_is_latched_across_task_change(self):
         monitor = self.make_monitor(required_consecutive_samples=1)
@@ -244,7 +251,7 @@ class PayloadMonitorTest(unittest.TestCase):
         events = monitor.observe_rc_out([1500] * 6 + [1900], 3.3)
 
         self.assertEqual(
-            ['command_reached', 'pwm_confirmed'],
+            ['command_reached', 'pwm_candidate_started', 'pwm_confirmed'],
             [event.key for event in events],
         )
         self.assertEqual(PayloadMonitorState.PWM_CONFIRMED, monitor.state)
@@ -276,14 +283,24 @@ class PayloadMonitorTest(unittest.TestCase):
             PayloadMonitor(PayloadMonitorConfig(servo_channel=0))
 
     def test_ros_monitor_node_contains_no_control_clients(self):
-        node_source = (
+        package_dir = Path(__file__).parents[1] / 'uav_payload'
+        for filename in ('payload_monitor_node.py', 'servo_open_logger_node.py'):
+            node_source = (package_dir / filename).read_text(encoding='utf-8')
+            self.assertNotIn('create_client(', node_source)
+            self.assertNotIn('mission/push', node_source)
+            self.assertNotIn('cmd/command', node_source)
+
+    def test_standalone_launch_starts_only_mavros_and_logger(self):
+        launch_source = (
             Path(__file__).parents[1]
-            / 'uav_payload'
-            / 'payload_monitor_node.py'
+            / 'launch'
+            / 'servo_open_test.launch.py'
         ).read_text(encoding='utf-8')
-        self.assertNotIn('create_client(', node_source)
-        self.assertNotIn('mission/push', node_source)
-        self.assertNotIn('cmd/command', node_source)
+        self.assertIn("FindPackageShare('mavros')", launch_source)
+        self.assertIn("executable='servo_open_logger_node'", launch_source)
+        self.assertNotIn("package='uav_fcu_interface'", launch_source)
+        self.assertNotIn("package='uav_mission_manager'", launch_source)
+        self.assertNotIn("package='uav_recon'", launch_source)
 
 
 if __name__ == '__main__':

@@ -12,6 +12,8 @@ payload_monitor_node:
     waypoint_list_topic: /mavros/mission/waypoints
     waypoint_reached_topic: /mavros/mission/reached
     rc_out_topic: /mavros/rc/out
+    gps_topic: /mavros/global_position/global
+    gps_stale_timeout_s: 1.0
     state_topic: /mavros/state
     task_id_topic: /mission/active_task_id
     status_topic: /payload/monitor/status

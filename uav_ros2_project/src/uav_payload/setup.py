@@ -1,4 +1,5 @@
 from glob import glob
+import os
 
 from setuptools import find_packages, setup
 
@@ -13,6 +14,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/config', glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -29,6 +31,7 @@ setup(
         'console_scripts': [
             'payload_sim_node = uav_payload.payload_sim_node:main',
             'payload_monitor_node = uav_payload.payload_monitor_node:main',
+            'servo_open_logger_node = uav_payload.servo_open_logger_node:main',
         ],
     },
 )

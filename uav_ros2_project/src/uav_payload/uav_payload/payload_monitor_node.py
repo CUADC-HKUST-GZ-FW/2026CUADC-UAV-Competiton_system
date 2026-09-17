@@ -8,6 +8,7 @@ from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from mavros_msgs.msg import RCOut, State, WaypointList, WaypointReached
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import NavSatFix, NavSatStatus
 from std_msgs.msg import String
 
 from .payload_monitor import PayloadMonitor, PayloadMonitorConfig, PayloadMonitorState
@@ -31,6 +32,8 @@ class PayloadMonitorNode(Node):
         self.declare_parameter('waypoint_list_topic', '/mavros/mission/waypoints')
         self.declare_parameter('waypoint_reached_topic', '/mavros/mission/reached')
         self.declare_parameter('rc_out_topic', '/mavros/rc/out')
+        self.declare_parameter('gps_topic', '/mavros/global_position/global')
+        self.declare_parameter('gps_stale_timeout_s', 1.0)
         self.declare_parameter('state_topic', '/mavros/state')
         self.declare_parameter('task_id_topic', '/mission/active_task_id')
         self.declare_parameter('mission_event_topic', '/fcu/mission_summary_event')
@@ -38,6 +41,7 @@ class PayloadMonitorNode(Node):
 
         self.enabled = bool(self.get_parameter('enabled').value)
         self.status_log_period_s = self._positive_float('status_log_period_s')
+        self.gps_stale_timeout_s = self._positive_float('gps_stale_timeout_s')
         config = PayloadMonitorConfig(
             servo_channel=int(self.get_parameter('servo_channel').value),
             release_pwm=int(self.get_parameter('release_pwm').value),
@@ -57,6 +61,10 @@ class PayloadMonitorNode(Node):
         self.flight_mode = ''
         self._last_status_log_time = None
         self._last_waypoint_list = None
+        self.last_gps = None
+        self.last_gps_received_at = None
+        self.open_candidate_gps = None
+        self.open_candidate_first_pwm = None
 
         sensor_qos = QoSProfile(depth=10)
         sensor_qos.reliability = ReliabilityPolicy.BEST_EFFORT
@@ -81,6 +89,12 @@ class PayloadMonitorNode(Node):
             RCOut,
             str(self.get_parameter('rc_out_topic').value),
             self._rc_out_callback,
+            sensor_qos,
+        )
+        self.create_subscription(
+            NavSatFix,
+            str(self.get_parameter('gps_topic').value),
+            self._gps_callback,
             sensor_qos,
         )
         self.create_subscription(
@@ -157,6 +171,8 @@ class PayloadMonitorNode(Node):
             )
             return
         self.monitor.start_mission_monitoring(self._now())
+        self.open_candidate_gps = None
+        self.open_candidate_first_pwm = None
         self.get_logger().info(
             self._prefix(PayloadMonitorState.WAITING_FOR_COMMAND_UPLOAD)
             + ' verified composite upload received; monitoring enabled'
@@ -187,6 +203,39 @@ class PayloadMonitorNode(Node):
             return
         events = self.monitor.observe_rc_out(msg.channels, self._now())
         self._log_events(events)
+
+    def _gps_callback(self, msg):
+        self.last_gps = msg
+        self.last_gps_received_at = self._now()
+
+    def _gps_sample(self):
+        if self.last_gps is None or self.last_gps_received_at is None:
+            return {
+                'latitude': None,
+                'longitude': None,
+                'altitude_m': None,
+                'age_ms': None,
+                'valid': False,
+            }
+        now = self._now()
+        age_s = max(0.0, now - self.last_gps_received_at)
+        values = (
+            self.last_gps.latitude,
+            self.last_gps.longitude,
+            self.last_gps.altitude,
+        )
+        finite = all(math.isfinite(float(value)) for value in values)
+        return {
+            'latitude': float(self.last_gps.latitude) if finite else None,
+            'longitude': float(self.last_gps.longitude) if finite else None,
+            'altitude_m': float(self.last_gps.altitude) if finite else None,
+            'age_ms': age_s * 1000.0,
+            'valid': (
+                finite
+                and self.last_gps.status.status >= NavSatStatus.STATUS_FIX
+                and age_s <= self.gps_stale_timeout_s
+            ),
+        }
 
     def _state_callback(self, msg):
         was_connected = self.mavros_connected
@@ -254,6 +303,12 @@ class PayloadMonitorNode(Node):
 
     def _log_events(self, events):
         for event in events:
+            if event.key == 'pwm_candidate_started':
+                self.open_candidate_gps = self._gps_sample()
+                self.open_candidate_first_pwm = self.monitor.pwm_candidate_first_value
+            elif event.key == 'pwm_candidate_rejected':
+                self.open_candidate_gps = None
+                self.open_candidate_first_pwm = None
             message = self._prefix(event.state) + ' ' + event.message
             if event.level == 'error':
                 self.get_logger().error(message)
@@ -302,6 +357,46 @@ class PayloadMonitorNode(Node):
             self._key('servo_channel', self.monitor.config.servo_channel),
             self._key('expected_pwm', self.monitor.config.release_pwm),
             self._key('observed_pwm', self.monitor.observed_pwm),
+            self._key(
+                'candidate_first_pwm',
+                self.open_candidate_first_pwm,
+            ),
+            self._key(
+                'confirmation_duration_ms',
+                None
+                if self.monitor.pwm_confirmation_duration_s is None
+                else self.monitor.pwm_confirmation_duration_s * 1000.0,
+            ),
+            self._key(
+                'open_latitude',
+                None
+                if self.open_candidate_gps is None
+                else self.open_candidate_gps['latitude'],
+            ),
+            self._key(
+                'open_longitude',
+                None
+                if self.open_candidate_gps is None
+                else self.open_candidate_gps['longitude'],
+            ),
+            self._key(
+                'open_altitude_m',
+                None
+                if self.open_candidate_gps is None
+                else self.open_candidate_gps['altitude_m'],
+            ),
+            self._key(
+                'open_gps_age_ms',
+                None
+                if self.open_candidate_gps is None
+                else self.open_candidate_gps['age_ms'],
+            ),
+            self._key(
+                'open_gps_valid',
+                False
+                if self.open_candidate_gps is None
+                else self.open_candidate_gps['valid'],
+            ),
             self._key('mavros_connected', self.mavros_connected),
             self._key('flight_mode', self.flight_mode),
         ]
