@@ -1894,7 +1894,7 @@ int main(int argc, char** argv) {
                << "}";
         const std::string line = record.str();
         if (periodic_status) std::cout << line << std::endl;
-        if (has_det && recognition_log) {
+        if (has_det && recognition_log.is_open()) {
           recognition_log << line << std::endl;
           if (!recognition_log) throw std::runtime_error("failed to write recognition event log");
         } else if (has_det && !periodic_status) {
