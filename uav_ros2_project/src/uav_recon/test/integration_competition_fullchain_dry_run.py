@@ -26,11 +26,28 @@ from uav_mission_manager.mission_manager_node import (
 from uav_vision_bridge.vision_target_bridge_node import VisionTargetBridge
 
 
-RUNTIME_SCRIPTS = (
-    Path(__file__).resolve().parents[4]
-    / 'youth-vision-runtime'
-    / 'scripts'
-)
+def find_runtime_scripts():
+    candidates = []
+    configured_root = os.environ.get('YOUTH_RUNTIME_ROOT')
+    if configured_root:
+        candidates.append(Path(configured_root) / 'scripts')
+    candidates.extend(
+        [
+            Path.home() / 'youth-vision-runtime' / 'scripts',
+            Path(__file__).resolve().parents[4]
+            / 'youth-vision-runtime'
+            / 'scripts',
+        ]
+    )
+    for candidate in candidates:
+        if (candidate / 'competition_selector.py').is_file():
+            return candidate
+    raise RuntimeError(
+        'competition_selector.py not found; set YOUTH_RUNTIME_ROOT'
+    )
+
+
+RUNTIME_SCRIPTS = find_runtime_scripts()
 sys.path.insert(0, str(RUNTIME_SCRIPTS))
 from competition_selector import CompetitionSelector  # noqa: E402
 
