@@ -276,12 +276,17 @@ trap 'FAILURE_REASON="received_signal_TERM"; exit 143' TERM
 trap 'FAILURE_REASON="received_signal_HUP"; exit 129' HUP
 
 readonly STAMP="$(date +%Y%m%d_%H%M%S)"
-readonly SESSION_ID="${STAMP}_${MODE}_fusion"
+readonly BOOT_ID_SHORT="$(cut -c1-8 /proc/sys/kernel/random/boot_id)"
+readonly PROCESS_START_TICKS="$(process_start_ticks "$$")"
+if [[ -z "${BOOT_ID_SHORT}" || -z "${PROCESS_START_TICKS}" ]]; then
+    fail "cannot construct a monotonic single-target session identity"
+fi
+readonly SESSION_ID="${STAMP}_${BOOT_ID_SHORT}_${PROCESS_START_TICKS}_${MODE}_fusion"
 readonly RESULT_DIR="${ROOT}/recon_results/sessions/${SESSION_ID}"
 readonly FLIGHT_LOG="${LOG_DIR}/flight_${SESSION_ID}.log"
 readonly VISION_LOG="${LOG_DIR}/vision_${SESSION_ID}.log"
 readonly RECON_LOG="${LOG_DIR}/ros_${SESSION_ID}.log"
-readonly BRIDGE_LOG="${LOG_DIR}/single_target_fusion_bridge_${STAMP}.log"
+readonly BRIDGE_LOG="${LOG_DIR}/single_target_fusion_bridge_${SESSION_ID}.log"
 readonly EVENT_LOG="${ROOT}/logs/recognition/recognition_events_${SESSION_ID}.jsonl"
 readonly ORCHESTRATOR_LOG="${LOG_DIR}/orchestrator_${SESSION_ID}.log"
 
