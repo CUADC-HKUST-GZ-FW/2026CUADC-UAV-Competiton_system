@@ -75,12 +75,35 @@ child_group_alive() {
     kill -0 -- "-${pid}" 2>/dev/null || kill -0 "${pid}" 2>/dev/null
 }
 
+child_session_alive() {
+    local session_id="$1"
+    ps -eo sid= | awk -v session_id="${session_id}" '
+        $1 == session_id { found=1; exit }
+        END { exit !found }
+    '
+}
+
 signal_child_group() {
     local signal_name="$1"
     local pid="$2"
     kill -s "${signal_name}" -- "-${pid}" 2>/dev/null \
         || kill -s "${signal_name}" "${pid}" 2>/dev/null \
         || true
+}
+
+signal_child_session() {
+    local signal_name="$1"
+    local session_id="$2"
+    local member_pid
+
+    while read -r member_pid; do
+        [[ -n "${member_pid}" ]] || continue
+        kill -s "${signal_name}" "${member_pid}" 2>/dev/null || true
+    done < <(
+        ps -eo pid=,sid= | awk -v session_id="${session_id}" '
+            $2 == session_id { print $1 }
+        '
+    )
 }
 
 register_child() {
@@ -117,7 +140,7 @@ cleanup() {
     for _ in {1..100}; do
         alive=0
         for pid in "${CHILD_PIDS[@]}"; do
-            if child_group_alive "${pid}"; then
+            if child_session_alive "${pid}"; then
                 alive=1
                 break
             fi
@@ -128,16 +151,16 @@ cleanup() {
 
     for ((index=${#CHILD_PIDS[@]} - 1; index >= 0; index--)); do
         pid="${CHILD_PIDS[index]}"
-        if child_group_alive "${pid}"; then
+        if child_session_alive "${pid}"; then
             echo "child_signal name=${CHILD_NAMES[index]} pid=${pid} signal=TERM"
-            signal_child_group TERM "${pid}"
+            signal_child_session TERM "${pid}"
         fi
     done
 
     for _ in {1..50}; do
         alive=0
         for pid in "${CHILD_PIDS[@]}"; do
-            if child_group_alive "${pid}"; then
+            if child_session_alive "${pid}"; then
                 alive=1
                 break
             fi
@@ -148,9 +171,9 @@ cleanup() {
 
     for ((index=${#CHILD_PIDS[@]} - 1; index >= 0; index--)); do
         pid="${CHILD_PIDS[index]}"
-        if child_group_alive "${pid}"; then
+        if child_session_alive "${pid}"; then
             echo "child_signal name=${CHILD_NAMES[index]} pid=${pid} signal=KILL"
-            signal_child_group KILL "${pid}"
+            signal_child_session KILL "${pid}"
         fi
     done
 
@@ -276,7 +299,7 @@ fi
 trap cleanup EXIT
 trap 'on_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
 trap 'FAILURE_REASON="received_signal_INT"; exit 130' INT
-trap 'FAILURE_REASON="received_signal_TERM"; exit 143' TERM
+trap 'FAILURE_REASON="received_signal_TERM"; exit 0' TERM
 trap 'FAILURE_REASON="received_signal_HUP"; exit 129' HUP
 
 readonly STAMP="$(date +%Y%m%d_%H%M%S)"
