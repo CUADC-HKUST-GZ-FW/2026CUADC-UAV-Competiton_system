@@ -101,13 +101,13 @@ cd ~/2026CUADC-UAV-Competiton_system
 `~/deployment_backups/`。更新范围有三种：
 
 ```bash
-# 飞行和视觉全部更新，并重建 ROS 2
+# 飞行和视觉全部更新，按需重建原生视觉程序，并重建 ROS 2
 ./deploy/update_jetson.sh --apply --all
 
 # 只更新飞行任务代码，并重建 ROS 2；保留本地视觉目录
 ./deploy/update_jetson.sh --apply --flight-only
 
-# 只更新视觉代码，不重建 ROS 2；保留本地飞行任务目录
+# 只更新视觉代码，按需重建原生视觉程序，不重建 ROS 2
 ./deploy/update_jetson.sh --apply --vision-only
 ```
 
@@ -120,6 +120,8 @@ cd ~/2026CUADC-UAV-Competiton_system
 - 在 NX164 上把部署副本中的 `/home/nx163/` 渲染为 `/home/nx164/`；
 - 保留本机当前相机序列号；
 - 不覆盖 engine、模型、录像、日志、识别结果及 ROS 2 的 `build/install/log`；
+- 视觉 C++ 或 Makefile 变化、二进制缺失或哈希不一致时，在暂存目录重建
+  `native/build/youth_vision_runner`，成功后才原子替换旧程序；
 - 分别记录飞行与视觉代码来源以及最后部署的 Git commit。
 
 查看设备当前部署版本：

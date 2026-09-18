@@ -301,6 +301,13 @@ previous_uav_source="$(state_value UAV_SOURCE)"
 previous_vision_source="$(state_value VISION_SOURCE)"
 previous_built_commit="$(state_value BUILT_COMMIT)"
 previous_built_at="$(state_value BUILT_AT)"
+previous_uav_built_commit="$(state_value UAV_BUILT_COMMIT)"
+previous_vision_build_status="$(state_value VISION_BUILD_STATUS)"
+previous_vision_native_source_sha256="$(state_value VISION_NATIVE_SOURCE_SHA256)"
+previous_vision_native_binary_sha256="$(state_value VISION_NATIVE_BINARY_SHA256)"
+previous_vision_native_built_commit="$(state_value VISION_NATIVE_BUILT_COMMIT)"
+previous_vision_native_built_at="$(state_value VISION_NATIVE_BUILT_AT)"
+previous_vision_native_validated_commit="$(state_value VISION_NATIVE_VALIDATED_COMMIT)"
 
 case "${scope}" in
     all)
@@ -334,6 +341,29 @@ if [[ "${scope}" == "vision" && -n "${previous_built_commit}" ]]; then
     if [[ -n "${previous_built_at}" ]]; then
         echo "BUILT_AT=${previous_built_at}"
     fi
+    if [[ -n "${previous_uav_built_commit}" ]]; then
+        echo "UAV_BUILT_COMMIT=${previous_uav_built_commit}"
+    fi
+fi
+if [[ "${sync_vision}" == true ]]; then
+    echo "VISION_BUILD_STATUS=pending"
+else
+    echo "VISION_BUILD_STATUS=${previous_vision_build_status:-unknown}"
+fi
+if [[ -n "${previous_vision_native_source_sha256}" ]]; then
+    echo "VISION_NATIVE_SOURCE_SHA256=${previous_vision_native_source_sha256}"
+fi
+if [[ -n "${previous_vision_native_binary_sha256}" ]]; then
+    echo "VISION_NATIVE_BINARY_SHA256=${previous_vision_native_binary_sha256}"
+fi
+if [[ -n "${previous_vision_native_built_commit}" ]]; then
+    echo "VISION_NATIVE_BUILT_COMMIT=${previous_vision_native_built_commit}"
+fi
+if [[ -n "${previous_vision_native_built_at}" ]]; then
+    echo "VISION_NATIVE_BUILT_AT=${previous_vision_native_built_at}"
+fi
+if [[ -n "${previous_vision_native_validated_commit}" ]]; then
+    echo "VISION_NATIVE_VALIDATED_COMMIT=${previous_vision_native_validated_commit}"
 fi
 } >"${STATE_FILE}"
 
