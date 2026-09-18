@@ -3,28 +3,76 @@ set -Eeuo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: ./deploy/update_jetson.sh [--check|--apply|--apply-local]
+Usage: ./deploy/update_jetson.sh [--check|--apply|--apply-local] [--all|--flight-only|--vision-only]
 
 Update NX163 or NX164 from origin/main.
   --check  Fetch and preview the deployment without changing live files.
   --apply  Fast-forward main, back up and sync live files, then rebuild ROS 2.
   --apply-local  Deploy the current clean commit without contacting GitHub.
+  --all  Update flight and vision code (default).
+  --flight-only  Update only uav_ros2_project and rebuild ROS 2.
+  --vision-only  Update only youth-vision-runtime without rebuilding ROS 2.
 
 This script never starts, stops, or restarts flight/vision processes.
 Device camera identity, intrinsics, distortion, and extrinsics are preserved.
 EOF
 }
 
-mode="check"
-case "${1:---check}" in
-    --check) mode="check" ;;
-    --apply) mode="apply" ;;
-    --apply-local) mode="apply-local" ;;
-    -h|--help) usage; exit 0 ;;
-    *) usage >&2; exit 2 ;;
+mode=""
+scope=""
+while (($#)); do
+    case "$1" in
+        --check|--apply|--apply-local)
+            if [[ -n "${mode}" ]]; then
+                echo "[ERROR] select only one update mode." >&2
+                usage >&2
+                exit 2
+            fi
+            mode="${1#--}"
+            ;;
+        --all)
+            requested_scope="all"
+            ;;
+        --flight-only|--uav-only)
+            requested_scope="uav"
+            ;;
+        --vision-only)
+            requested_scope="vision"
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            usage >&2
+            exit 2
+            ;;
+    esac
+    if [[ -n "${requested_scope:-}" ]]; then
+        if [[ -n "${scope}" ]]; then
+            echo "[ERROR] select only one update scope." >&2
+            usage >&2
+            exit 2
+        fi
+        scope="${requested_scope}"
+        unset requested_scope
+    fi
+    shift
+done
+mode="${mode:-check}"
+scope="${scope:-all}"
+
+case "${scope}" in
+    all) scope_flag="--all" ;;
+    uav) scope_flag="--flight-only" ;;
+    vision) scope_flag="--vision-only" ;;
 esac
 
-for command in git rsync colcon getent; do
+required_commands=(git rsync getent)
+if [[ "${scope}" != "vision" ]]; then
+    required_commands+=(colcon)
+fi
+for command in "${required_commands[@]}"; do
     command -v "${command}" >/dev/null 2>&1 || {
         echo "[ERROR] required command not found: ${command}" >&2
         exit 1
@@ -66,8 +114,9 @@ if [[ "${mode}" == "check" ]]; then
     target="$(git -C "${REPO_ROOT}" rev-parse origin/main)"
     echo "[CHECK] current=${current}"
     echo "[CHECK] target=${target}"
+    echo "[CHECK] scope=${scope}"
     git -C "${REPO_ROOT}" log --oneline --decorate "HEAD..origin/main"
-    "${REPO_ROOT}/deploy/sync_local_jetson.sh" --check
+    "${REPO_ROOT}/deploy/sync_local_jetson.sh" --check "${scope_flag}"
     exit 0
 fi
 
@@ -79,7 +128,17 @@ else
 fi
 
 echo "[INFO] backing up and syncing live runtime trees..."
-"${REPO_ROOT}/deploy/sync_local_jetson.sh" --apply
+"${REPO_ROOT}/deploy/sync_local_jetson.sh" --apply "${scope_flag}"
+
+readonly COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+readonly STATE_FILE="${DEVICE_HOME}/.local/state/cuadc-uav/deployed.env"
+
+if [[ "${scope}" == "vision" ]]; then
+    echo "[OK] ${DEVICE_USER} vision code is at ${COMMIT}."
+    echo "[NOTE] ROS 2 was not rebuilt because flight code was not selected."
+    echo "[NOTE] no service or flight process was restarted."
+    exit 0
+fi
 
 ros_setup=""
 if [[ -n "${ROS_DISTRO:-}" && -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]]; then
@@ -100,12 +159,11 @@ set -u
 cd "${LIVE_UAV_ROOT}"
 colcon build --symlink-install
 
-readonly COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
-readonly STATE_FILE="${DEVICE_HOME}/.local/state/cuadc-uav/deployed.env"
 {
     echo "BUILT_COMMIT=${COMMIT}"
     echo "BUILT_AT=$(date --iso-8601=seconds)"
+    echo "UAV_BUILT_COMMIT=${COMMIT}"
 } >>"${STATE_FILE}"
 
-echo "[OK] ${DEVICE_USER} live code and ROS install are at ${COMMIT}."
+echo "[OK] ${DEVICE_USER} selected scope=${scope} and ROS install are at ${COMMIT}."
 echo "[NOTE] no service or flight process was restarted."

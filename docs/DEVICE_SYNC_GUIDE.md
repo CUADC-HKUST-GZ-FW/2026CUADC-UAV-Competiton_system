@@ -88,26 +88,39 @@ cd ~/2026CUADC-UAV-Competiton_system
 
 ## 5. Jetson 日常更新
 
-无论队员使用哪台笔记本，SSH 登录后的命令相同：
+无论队员使用哪台笔记本，SSH 登录后的命令相同。推荐使用统一入口，脚本会自己执行
+`fetch` 和 `fast-forward`：
 
 ```bash
 cd ~/2026CUADC-UAV-Competiton_system
-git switch main
-git fetch origin
-git pull --ff-only origin main
-./deploy/sync_local_jetson.sh --check
-./deploy/sync_local_jetson.sh --apply
+./deploy/update_jetson.sh --check --all
+./deploy/update_jetson.sh --apply --all
 ```
 
-`--check` 只显示差异；`--apply` 才更新运行目录，并把被覆盖文件备份到 `~/deployment_backups/`。
+`--check` 只显示差异；`--apply` 才更新运行目录，并把被覆盖文件备份到
+`~/deployment_backups/`。更新范围有三种：
+
+```bash
+# 飞行和视觉全部更新，并重建 ROS 2
+./deploy/update_jetson.sh --apply --all
+
+# 只更新飞行任务代码，并重建 ROS 2；保留本地视觉目录
+./deploy/update_jetson.sh --apply --flight-only
+
+# 只更新视觉代码，不重建 ROS 2；保留本地飞行任务目录
+./deploy/update_jetson.sh --apply --vision-only
+```
+
+每种范围都应先把 `--apply` 换成 `--check` 预览。`--uav-only` 是
+`--flight-only` 的兼容别名。未明确写范围时默认使用 `--all`。
 
 部署脚本会：
 
-- 将两个同名源码目录同步到实际运行目录；
+- 只将选中的源码目录同步到实际运行目录；
 - 在 NX164 上把部署副本中的 `/home/nx163/` 渲染为 `/home/nx164/`；
 - 保留本机当前相机序列号；
 - 不覆盖 engine、模型、录像、日志、识别结果及 ROS 2 的 `build/install/log`；
-- 记录最后部署的 Git commit。
+- 分别记录飞行与视觉代码来源以及最后部署的 Git commit。
 
 查看设备当前部署版本：
 
