@@ -2,6 +2,17 @@
 
 set -euo pipefail
 
+readonly UAV_ENTRY_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly UAV_SSH_DETACH_HELPER="${UAV_ENTRY_SCRIPT_DIR}/lib/ssh_detach.sh"
+
+if [[ -r "${UAV_SSH_DETACH_HELPER}" ]]; then
+    source "${UAV_SSH_DETACH_HELPER}"
+elif [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_TTY:-}" ]] \
+    && [[ "${UAV_FOREGROUND:-0}" != "1" ]]; then
+    echo "[DETACHED][ERROR] missing helper: ${UAV_SSH_DETACH_HELPER}" >&2
+    exit 1
+fi
+
 readonly ROS_SETUP="/opt/ros/humble/setup.bash"
 readonly WS_ROOT="/home/nx163/uav_ros2_project"
 readonly WS_SETUP="${WS_ROOT}/install/setup.bash"
@@ -18,6 +29,16 @@ fi
 if [[ ! -r "${WS_SETUP}" ]]; then
     echo "[SERVO_TEST][ERROR] workspace setup not found: ${WS_SETUP}" >&2
     exit 1
+fi
+
+if declare -F uav_maybe_detach_from_ssh >/dev/null; then
+    detach_rc=0
+    uav_maybe_detach_from_ssh "$0" "$@" || detach_rc=$?
+    if [[ "${detach_rc}" == "200" ]]; then
+        exit 0
+    elif [[ "${detach_rc}" != "0" ]]; then
+        exit "${detach_rc}"
+    fi
 fi
 
 set +u

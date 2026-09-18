@@ -8,6 +8,19 @@ chmod 755 /home/nx163/uav_ros2_project/scripts/start_servo_open_test.sh
 /home/nx163/uav_ros2_project/scripts/start_servo_open_test.sh 7
 ```
 
+通过 SSH 运行时，启动脚本会像其他飞行入口一样自动转入后台。查看状态和停止：
+
+```bash
+/home/nx163/uav_ros2_project/scripts/status_detached_uav.sh servo
+/home/nx163/uav_ros2_project/scripts/stop_detached_uav.sh servo
+```
+
+启动器日志保存在 `~/uav_flight_logs/launcher/`。如需在当前终端前台调试，运行：
+
+```bash
+UAV_FOREGROUND=1 /home/nx163/uav_ros2_project/scripts/start_servo_open_test.sh 7
+```
+
 该命令只启动一个 MAVROS 和只读日志节点，不启动 MissionManager、飞控任务接口、
 侦察、视觉桥接或航线上传节点。记录节点只订阅 `/mavros/rc/out` 和
 `/mavros/global_position/global`，不会上传任务、切换模式或写入舵机。检测程序
@@ -32,3 +45,27 @@ ros2 launch uav_payload servo_open_test.launch.py \
 ```
 
 为避免两个 MAVROS 同时连接飞控，启动脚本检测到 `/mavros` 已存在时会拒绝启动。
+
+## 地面实际开合测试
+
+`servo_open_logger_node` 本身只读，不会主动控制舵机。如需在拆除螺旋桨、飞机未
+解锁的地面环境中实际观察舵机动作，先启动上述独立检测程序，再运行：
+
+```bash
+/home/nx163/uav_ros2_project/scripts/servo_test_control.sh status 7
+/home/nx163/uav_ros2_project/scripts/servo_test_control.sh close 7
+/home/nx163/uav_ros2_project/scripts/servo_test_control.sh open 7
+/home/nx163/uav_ros2_project/scripts/servo_test_control.sh close 7
+```
+
+`open` 会要求在交互终端输入大写 `OPEN`，随后通过现有 MAVROS 向飞控发送真实的
+`MAV_CMD_DO_SET_SERVO`，将第 7 通道设为 `1900 us`；`close` 将其设回
+`1350 us`。脚本拒绝在飞控已解锁时动作，不提供自动循环，也不会修改飞控参数。
+命令成功后还会要求 `/mavros/rc/out` 连续三帧到达目标值。软件只能确认飞控输出
+PWM，机械机构是否真实运动仍须现场目视确认。
+
+控制操作记录在：
+
+```text
+~/uav_flight_logs/servo_open_test/manual_control.log
+```

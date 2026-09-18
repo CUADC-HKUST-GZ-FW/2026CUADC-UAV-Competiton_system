@@ -6,7 +6,7 @@ readonly RUN_DIR="${UAV_DETACHED_RUN_DIR:-${HOME}/uav_flight_logs/run}"
 readonly CURRENT_BOOT_ID="$(cat /proc/sys/kernel/random/boot_id)"
 
 case "${SELECTOR}" in
-    all|start_uav|start_single_target_fusion|start_competition_target_fusion|start_manual_target)
+    all|start_uav|start_single_target_fusion|start_competition_target_fusion|start_manual_target|start_servo_open_test)
         ;;
     uav)
         selector_name="start_uav"
@@ -20,8 +20,11 @@ case "${SELECTOR}" in
     manual)
         selector_name="start_manual_target"
         ;;
+    servo)
+        selector_name="start_servo_open_test"
+        ;;
     *)
-        echo "usage: $0 [all|uav|single|competition|manual]" >&2
+        echo "usage: $0 [all|uav|single|competition|manual|servo]" >&2
         exit 2
         ;;
 esac

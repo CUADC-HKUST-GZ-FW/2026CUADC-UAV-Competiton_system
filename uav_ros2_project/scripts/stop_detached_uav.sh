@@ -8,7 +8,7 @@ readonly RUN_DIR="${UAV_DETACHED_RUN_DIR:-${HOME}/uav_flight_logs/run}"
 readonly CURRENT_BOOT_ID="$(cat /proc/sys/kernel/random/boot_id)"
 
 case "${SELECTOR}" in
-    all|start_uav|start_single_target_fusion|start_competition_target_fusion|start_manual_target)
+    all|start_uav|start_single_target_fusion|start_competition_target_fusion|start_manual_target|start_servo_open_test)
         selector_name="${SELECTOR}"
         ;;
     uav)
@@ -23,8 +23,11 @@ case "${SELECTOR}" in
     manual)
         selector_name="start_manual_target"
         ;;
+    servo)
+        selector_name="start_servo_open_test"
+        ;;
     *)
-        echo "usage: $0 <uav|single|competition|manual|all>" >&2
+        echo "usage: $0 <uav|single|competition|manual|servo|all>" >&2
         exit 2
         ;;
 esac
@@ -56,7 +59,8 @@ for state_file in "${state_files[@]}"; do
         "${REPO_ROOT}/scripts/start_uav.sh"|\
         "${REPO_ROOT}/scripts/start_single_target_fusion.sh"|\
         "${REPO_ROOT}/scripts/start_competition_target_fusion.sh"|\
-        "${REPO_ROOT}/scripts/start_manual_target.sh")
+        "${REPO_ROOT}/scripts/start_manual_target.sh"|\
+        "${REPO_ROOT}/scripts/start_servo_open_test.sh")
             ;;
         *)
             echo "refusing untrusted state file: ${state_file}" >&2
