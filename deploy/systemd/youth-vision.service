@@ -1,15 +1,15 @@
 [Unit]
-Description=NX163 single-target image recognition and UAV fusion chain
+Description=Jetson single-target image recognition and UAV fusion chain
 After=network-online.target time-set.target
 Wants=network-online.target time-set.target
 
 [Service]
 Type=simple
-User=nx163
-Environment=HOME=/home/nx163
+User=@UAV_USER@
+Environment=HOME=@UAV_HOME@
 Environment=UAV_FOREGROUND=1
-WorkingDirectory=/home/nx163/uav_ros2_project
-ExecStart=/home/nx163/uav_ros2_project/scripts/start_single_target_fusion.sh image 0.00
+WorkingDirectory=@UAV_PROJECT_DIR@
+ExecStart=@UAV_PROJECT_DIR@/scripts/start_single_target_fusion.sh image @HEADING_DEG@
 Restart=on-failure
 RestartSec=10
 KillMode=mixed
