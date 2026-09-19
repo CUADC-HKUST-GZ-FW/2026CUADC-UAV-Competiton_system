@@ -66,7 +66,7 @@ COMMON_FCU_ARGUMENT_DEFAULTS = {
     # Dynamic-R prediction. Set dynamic_r_test_mode=true only when the old
     # fixed-offset test path is explicitly needed.
     'dynamic_r_enabled': 'true',
-    'dynamic_r_test_mode': 'true',
+    'dynamic_r_test_mode': 'false',
     'dynamic_r_test_offset_m': '50.0',
     'dynamic_r_prediction_window_sec': '1.2',
     'dynamic_r_min_prediction_samples': '5',
