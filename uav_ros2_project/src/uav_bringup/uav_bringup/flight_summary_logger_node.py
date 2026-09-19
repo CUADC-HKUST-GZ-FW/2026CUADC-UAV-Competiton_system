@@ -445,15 +445,11 @@ class FlightSummaryLoggerNode(Node):
                 f'  R dynamic: lat={record.get("dynamic_r_lat")} '
                 f'lon={record.get("dynamic_r_lon")} alt={record.get("dynamic_r_alt")}\n'
                 'SECOND FULL MISSION UPDATE\n'
-                f'  push: {"PASS" if record.get("push_pass") else "FAILED (reconciled)"} '
-                f'{record.get("second_full_push_duration_ms")} ms\n'
-                f'  pull: PASS {record.get("second_full_pull_duration_ms")} ms\n'
+                f'  push: PASS {record.get("push_duration_ms")} ms\n'
+                f'  pull: PASS {record.get("verify_duration_ms")} ms\n'
                 f'  verify: PASS {record.get("verify_cpu_duration_ms")} ms\n'
-                'MISSION PROGRESS\n'
-                f'  before: seq{record.get("current_seq_before_update")}\n'
-                f'  after: seq{record.get("current_seq_after_update")}\n'
                 'DYNAMIC R\n  result: VERIFIED\n'
-                f'  total: {record.get("dynamic_full_update_total_ms")} ms\n'
+                f'  total: {record.get("dynamic_update_total_ms")} ms\n'
                 '  source: DYNAMIC'
             )
         if event in {'dynamic_update_skipped', 'dynamic_update_too_late'}:
@@ -930,7 +926,8 @@ class FlightSummaryLoggerNode(Node):
             }:
                 self._aburcd_metrics['result'] = 'R_SAFE_FALLBACK'
             elif name in {
-                'second_full_push_failed', 'r_update_rejected_mission_busy',
+                'second_full_push_failed',
+                'r_update_rejected_mission_busy',
                 'mission_inconsistent', 'mission_state_unknown',
                 'mission_progress_unknown', 'dynamic_mission_failed'
             }:

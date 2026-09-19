@@ -124,11 +124,12 @@ def prepare_dynamic_update_node():
     node = make_node_without_ros()
     node.active_task_id = 'target_001'
     node.mission_type = 'COMPOSITE'
+    node.release_command_enabled = True
     node.get_logger = lambda: NullLogger()
     points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
     original = [
         node.make_nav_waypoint(22.8800 + index * 0.001, 113.4900, 35.0, 15.0)
-        for index in range(14)
+        for index in range(13)
     ]
     mission, _ = node.build_composite_mission(points, original, 5, 9)
     node.composite_route_points = points
@@ -737,6 +738,50 @@ def test_virtual_b_crossing_triggers_once_only_while_u_is_current():
     assert snapshots[0]['ground_speed_mps'] == 21.0
 
 
+def test_dynamic_r_second_full_upload_changes_only_r_and_verifies_pullback():
+    node, points, mission, events = prepare_dynamic_update_node()
+    full_calls = []
+    uploaded = None
+
+    async def push(waypoints, retry=True, started_monotonic=None):
+        nonlocal uploaded
+        uploaded = [node.clone_waypoint(wp) for wp in waypoints]
+        full_calls.append((retry, started_monotonic, len(waypoints)))
+        return SimpleNamespace(success=True, wp_transfered=len(waypoints))
+
+    async def pull(_started, reconcile=False):
+        return SimpleNamespace(
+            current_seq=node.composite_seq_u,
+            waypoints=[node.clone_waypoint(wp) for wp in uploaded],
+        )
+
+    node.push_mission_async = push
+    node._pull_dynamic_mission_async = pull
+    candidate = node.compute_dynamic_r({'ground_speed_mps': 20.0}, points['C'])
+    asyncio.run(node._update_dynamic_r_async(
+        candidate,
+        {'timestamp_monotonic': time.monotonic(), 'current_seq': 6},
+        0.1,
+    ))
+
+    assert len(mission) == 14
+    assert node.composite_seq_r == 7
+    assert node.composite_seq_release == 8
+    assert node.composite_seq_d == 9
+    assert full_calls and full_calls[0][0] is False
+    assert full_calls[0][2] == len(mission)
+    changed = [
+        seq for seq, (before, after) in enumerate(zip(mission, uploaded))
+        if tuple(getattr(before, f) for f in ('frame','command','param1','param2','param3','param4','x_lat','y_long','z_alt','autocontinue','is_current')) != tuple(getattr(after, f) for f in ('frame','command','param1','param2','param3','param4','x_lat','y_long','z_alt','autocontinue','is_current'))
+    ]
+    assert changed == [7]
+    assert node.composite_expected_waypoints[8].command == mission[8].command == 183
+    assert node.composite_expected_waypoints[8].param2 == mission[8].param2
+    assert node.composite_expected_waypoints[9].x_lat == mission[9].x_lat
+    assert node._dynamic_update_verified
+    assert 'dynamic_mission_verified' in [name for name, _ in events]
+
+
 def _commit_verified_for_test(node, points, mission):
     candidate = node.compute_dynamic_r({'ground_speed_mps': 20.0}, points['C'])
     expected = [node.clone_waypoint(wp) for wp in mission]
@@ -839,7 +884,7 @@ def test_last_reached_r_is_deadline_even_when_current_seq_stays_u():
     assert 'dynamic_mission_verified' not in [name for name, _ in events]
 
 
-def test_d_reached_cancellation_prevents_worker_full_push():
+def test_d_reached_cancellation_prevents_worker_second_full_push():
     node, _points, _mission, events = prepare_dynamic_update_node()
     node._dynamic_update_started = True
     node._cancel_dynamic_update('d_reached')
@@ -896,7 +941,7 @@ def test_dynamic_r_update_rejects_late_without_push():
         lambda event, **fields: events.append(event)
     )
     calls = []
-    node.push_mission_async = lambda *_args: calls.append(True)
+    node.push_mission_async = lambda *_args, **_kwargs: calls.append(True)
     candidate = {
         'valid': True, 'lat': 22.0, 'lon': 113.0, 'alt': 35.0,
     }
@@ -908,11 +953,11 @@ def test_dynamic_r_update_rejects_late_without_push():
     assert node._dynamic_update_result == 'UPDATE_TOO_LATE'
 
 
-def test_dynamic_r_timeout_stops_before_full_push():
+def test_dynamic_r_timeout_stops_before_second_full_push():
     node, points, _mission, events = prepare_dynamic_update_node()
     node.dynamic_r_update_timeout_sec = 0.001
     calls = []
-    node.push_mission_async = lambda *_args: calls.append(True)
+    node.push_mission_async = lambda *_args, **_kwargs: calls.append(True)
     node._dynamic_r_worker({
         'timestamp_monotonic': time.monotonic() - 1.0, 'current_seq': 6,
     })

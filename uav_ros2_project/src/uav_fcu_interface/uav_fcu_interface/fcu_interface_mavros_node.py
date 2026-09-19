@@ -28,7 +28,6 @@ from uav_interfaces.srv import GoToGlobal
 
 from uav_fcu_interface.mission_verification import verify_mission_waypoints
 
-
 class FcuInterfaceMavrosNode(Node):
     """Upload and monitor a verified composite AUTO mission."""
 
@@ -176,11 +175,13 @@ class FcuInterfaceMavrosNode(Node):
         # Reserved for later release-mechanism calibration. Keep 0.0 now.
         self.declare_parameter('dynamic_r_release_delay_sec', 0.0)
         self.declare_parameter('dynamic_r_prediction_shadow_mode', False)
-        # Software deadline for the second full update, in addition to R active/
+        # Software deadline for the second full-mission update, in addition to R active/
         # reached. In-flight services may finish; read-only reconciliation is
         # still required after an error, but no late success or retry is allowed.
         self.declare_parameter('dynamic_r_update_timeout_sec', 6.0)
         self.declare_parameter('aburcd_update_metrics_enabled', True)
+        self.declare_parameter('target_system_id', 1)
+        self.declare_parameter('target_component_id', 1)
 
         self.dry_run_goto = bool(self.get_parameter('dry_run_goto').value)
         self.allow_mission_upload = bool(
@@ -335,6 +336,10 @@ class FcuInterfaceMavrosNode(Node):
         )
         self.aburcd_update_metrics_enabled = bool(
             self.get_parameter('aburcd_update_metrics_enabled').value
+        )
+        self.target_system_id = int(self.get_parameter('target_system_id').value)
+        self.target_component_id = int(
+            self.get_parameter('target_component_id').value
         )
         if not (
             self.a_offset_m > self.b_offset_m > self.u_offset_m
@@ -2685,116 +2690,282 @@ class FcuInterfaceMavrosNode(Node):
         return False
 
     async def _update_dynamic_r_async(self, candidate, snapshot, calc_duration_ms):
+        """Replace the complete FCU mission once with the dynamic-R version.
+
+        The first upload installs the complete R_safe mission.  This second
+        transaction again uses WaypointPush(start_index=0); no partial mission
+        protocol or raw MAVLink writer is used.
+        """
         started = float(snapshot['timestamp_monotonic'])
         self._require_dynamic_operation_allowed(started, 'before_second_full_push')
         if self._second_full_push_attempted:
-            return  # Exactly one second upload per mission, including failures.
+            return
+
         expected = self.build_dynamic_mission(candidate)
         if not self.dynamic_mission_structure_matches(expected):
-            self._full_update_event('dynamic_mission_structure_mismatch', r_source='SAFE')
+            self._full_update_event(
+                'dynamic_mission_structure_mismatch', r_source='SAFE'
+            )
             self._cancel_dynamic_update('structure_mismatch')
             return
-        if self._current_mission_seq() is None:
-            self._dynamic_manual_failure('SAFE', 'current sequence unavailable',
-                                         'mission_progress_unknown')
+
+        if self._current_mission_seq() != self.dynamic_indices['U']:
+            self._dynamic_manual_failure(
+                'SAFE',
+                'current navigation item is not U',
+                'second_full_push_failed',
+            )
             return
+
         with self._dynamic_state_lock:
             self._dynamic_metrics.update(
-                dynamic_trigger_timestamp=started, calc_duration_ms=calc_duration_ms,
+                dynamic_trigger_timestamp=started,
+                calc_duration_ms=calc_duration_ms,
                 current_seq_before_update=self._current_mission_seq(),
                 last_reached_seq_before_update=self.last_reached_seq,
+                second_full_push_start=time.monotonic(),
             )
+
         self._require_dynamic_operation_allowed(started, 'second_full_push_dispatch')
         self._second_full_push_attempted = True
         self._dynamic_update_state = 'PUSHING'
-        self._dynamic_metrics['second_full_push_start'] = time.monotonic()
-        self._full_update_event('second_full_push_start')
-        push_error = None
-        try:
-            await self.push_mission_async(expected, retry=False,
-                                          started_monotonic=started)
-        except Exception as error:
-            push_error = str(error)
-        finally:
-            now = time.monotonic()
-            self._dynamic_metrics.update(
-                second_full_push_done=now,
-                second_full_push_duration_ms=(
-                    now - self._dynamic_metrics['second_full_push_start']) * 1000.0,
-            )
-        self._dynamic_metrics['push_pass'] = push_error is None
+        push_started = time.monotonic()
         self._full_update_event(
-            'second_full_push_failed' if push_error else 'second_full_push_done',
-            failure_reason=push_error, push_pass=push_error is None,
+            'second_full_push_start',
+            waypoint_count=len(expected),
+            start_index=0,
+            r_seq=int(self.dynamic_indices['R']),
         )
-        # Even after cancellation/timeout, one read-only reconciliation is needed.
-        # Never resend or restore R: service errors can leave FCU contents uncertain.
-        self._dynamic_metrics['second_full_pull_start'] = time.monotonic()
+        try:
+            # Deliberately no service retry for the in-flight replacement.
+            await self.push_mission_async(
+                expected, retry=False, started_monotonic=started
+            )
+        except Exception as error:
+            self._dynamic_metrics['second_full_push_failure_reason'] = str(error)
+            await self._handle_dynamic_full_update_failure_async(
+                candidate,
+                expected,
+                started,
+                f'second_full_push_failed:{error}',
+                calc_duration_ms=calc_duration_ms,
+            )
+            return
+
+        push_duration_ms = (time.monotonic() - push_started) * 1000.0
+        self._dynamic_update_state = 'PUSH_ACKED'
+        self._dynamic_metrics.update(
+            second_full_push_done=time.monotonic(),
+            second_full_push_duration_ms=push_duration_ms,
+        )
+        self._full_update_event(
+            'second_full_push_done',
+            waypoint_count=len(expected),
+            push_duration_ms=push_duration_ms,
+            second_full_push_duration_ms=push_duration_ms,
+        )
+
+        self._require_dynamic_operation_allowed(started, 'before_second_full_pull')
+        self._dynamic_update_state = 'VERIFYING'
+        pull_started = time.monotonic()
+        self._dynamic_metrics['second_full_pull_start'] = pull_started
         self._full_update_event('second_full_pull_start')
         try:
-            pulled = await self.pull_mission_async()
+            pulled = await self._pull_dynamic_mission_async(started)
         except Exception as error:
-            self._dynamic_metrics['second_full_pull_done'] = time.monotonic()
-            self._dynamic_metrics['second_full_pull_duration_ms'] = (
-                self._dynamic_metrics['second_full_pull_done']
-                - self._dynamic_metrics['second_full_pull_start']) * 1000.0
-            self._full_update_event('second_full_pull_failed', failure_reason=str(error))
-            self._dynamic_manual_failure('UNKNOWN', str(error))
+            await self._handle_dynamic_full_update_failure_async(
+                candidate,
+                expected,
+                started,
+                f'second_full_pull_failed:{error}',
+                calc_duration_ms=calc_duration_ms,
+                push_duration_ms=push_duration_ms,
+            )
             return
-        now = time.monotonic()
+
+        pull_duration_ms = (time.monotonic() - pull_started) * 1000.0
         self._dynamic_metrics.update(
-            second_full_pull_done=now,
-            second_full_pull_duration_ms=(
-                now - self._dynamic_metrics['second_full_pull_start']) * 1000.0,
-            second_full_verify_start=now,
+            second_full_pull_done=time.monotonic(),
+            second_full_pull_duration_ms=pull_duration_ms,
         )
-        self._full_update_event('second_full_pull_done')
+        self._full_update_event(
+            'second_full_pull_done',
+            second_full_pull_duration_ms=pull_duration_ms,
+        )
+
+        self._require_dynamic_operation_allowed(started, 'before_second_full_verify')
+        verify_started = time.monotonic()
+        self._dynamic_metrics['second_full_verify_start'] = verify_started
         self._full_update_event('second_full_verify_start')
-        verify_cpu_started = time.monotonic()
         actual = list(pulled.waypoints)
-        dynamic_ok, reason = self.verify_temporary_mission(expected, actual)
-        safe_ok, _ = self.verify_temporary_mission(self.safe_composite_mission, actual)
-        now = time.monotonic()
+        ok, reason = self.verify_temporary_mission(expected, actual)
+        verify_cpu_duration_ms = (time.monotonic() - verify_started) * 1000.0
         self._dynamic_metrics.update(
-            second_full_verify_done=now,
-            verify_cpu_duration_ms=(now - verify_cpu_started) * 1000.0,
+            second_full_verify_done=time.monotonic(),
+            verify_cpu_duration_ms=verify_cpu_duration_ms,
         )
-        if not dynamic_ok and not safe_ok:
-            self._dynamic_manual_failure('INCONSISTENT', reason)
+        if not ok:
+            await self._handle_dynamic_full_update_failure_async(
+                candidate,
+                expected,
+                started,
+                f'second_full_verify_failed:{reason}',
+                calc_duration_ms=calc_duration_ms,
+                push_duration_ms=push_duration_ms,
+                verify_duration_ms=pull_duration_ms,
+                verify_cpu_duration_ms=verify_cpu_duration_ms,
+            )
             return
-        state = 'DYNAMIC' if dynamic_ok else 'SAFE'
-        self._full_update_event('second_full_verify_pass', mission_state=state)
-        # SAFE is known content, but progress can still have reset during the push.
-        try:
-            progress_ok = await self._check_dynamic_progress(
-                started, safe_content=state == 'SAFE')
-        except DynamicUpdateAborted as error:
-            if self._dynamic_update_result == 'UPDATE_TOO_LATE':
-                self._full_update_event('dynamic_update_too_late',
-                                        mission_state=state, failure_reason=str(error))
-            self._dynamic_manual_failure(state, str(error), 'mission_progress_unknown')
-            return
-        except Exception as error:
-            self._dynamic_manual_failure(state, str(error), 'mission_progress_unknown')
-            return
+
+        self._full_update_event(
+            'second_full_verify_pass', verification_reason=reason
+        )
+
+        progress_ok = await self._check_dynamic_progress(started)
         if not progress_ok:
-            self._dynamic_manual_failure(state, 'cannot determine safe mission progress',
-                                         'mission_progress_unknown')
+            self._dynamic_manual_failure(
+                'UNKNOWN',
+                'mission progress could not be verified after second full upload',
+                'mission_progress_unknown',
+            )
             return
-        if state == 'SAFE':
-            self._set_dynamic_update_result('R_SAFE_FALLBACK')
-            self._full_update_event('dynamic_update_skipped', mission_state='SAFE',
-                                    r_source='SAFE', reason='fcu_retained_safe_mission')
-            return
+
+        self._require_dynamic_operation_allowed(started, 'final_verify_commit')
         committed = self._commit_dynamic_r_verified(
             candidate, expected, started, calc_duration_ms,
-            self._dynamic_metrics['second_full_push_duration_ms'],
-            self._dynamic_metrics['second_full_pull_duration_ms'], reason,
-            self._dynamic_metrics['verify_cpu_duration_ms'],
+            push_duration_ms, pull_duration_ms, reason,
+            verify_cpu_duration_ms,
         )
         if not committed:
-            self._dynamic_manual_failure('DYNAMIC', 'deadline changed before commit',
-                                         'mission_progress_unknown')
+            self._finish_dynamic_abort('deadline changed before commit', started)
+
+    async def _pull_dynamic_mission_async(self, started, *, reconcile=False):
+        """Pull the complete FCU mission.
+
+        Normal verification obeys the dynamic deadline.  Reconciliation after a
+        failed second full push is read-only and is therefore allowed to finish
+        even if the write deadline has just expired.
+        """
+        if not reconcile:
+            self._require_dynamic_operation_allowed(started, 'pull')
+            remaining = self.dynamic_r_update_timeout_sec - (
+                time.monotonic() - started
+            )
+            return await self.pull_mission_async(
+                timeout_sec=max(0.05, remaining),
+                abort_check=lambda: self._dynamic_abort_reason(started),
+            )
+        return await self.pull_mission_async(timeout_sec=self.service_timeout_sec)
+
+    def _classify_actual_mission(self, pulled, dynamic_expected):
+        if pulled is None or getattr(pulled, 'waypoints', None) is None:
+            return 'UNKNOWN', 'mission unavailable'
+        actual = list(pulled.waypoints)
+        safe_ok, safe_reason = self.verify_temporary_mission(
+            list(self.safe_composite_mission), actual
+        )
+        if safe_ok:
+            return 'SAFE', safe_reason
+        dynamic_ok, dynamic_reason = self.verify_temporary_mission(
+            dynamic_expected, actual
+        )
+        if dynamic_ok:
+            return 'DYNAMIC', dynamic_reason
+        return (
+            'INCONSISTENT',
+            f'safe_mismatch={safe_reason};dynamic_mismatch={dynamic_reason}',
+        )
+
+    async def _handle_dynamic_full_update_failure_async(
+        self, candidate, expected, started, failure_reason, **durations
+    ):
+        """Reconcile a failed full replacement without issuing another write."""
+        mission_state = 'UNKNOWN'
+        reconcile_reason = 'pull not attempted'
+        pulled = None
+        try:
+            pulled = await self._pull_dynamic_mission_async(
+                started, reconcile=True
+            )
+            mission_state, reconcile_reason = self._classify_actual_mission(
+                pulled, expected
+            )
+        except Exception as error:
+            reconcile_reason = str(error)
+
+        self._dynamic_metrics['second_full_push_failure_reason'] = failure_reason
+        self._full_update_event(
+            'second_full_push_failed',
+            failure_reason=failure_reason,
+            mission_state=mission_state,
+            reconciliation_reason=reconcile_reason,
+            **durations,
+        )
+
+        if mission_state == 'SAFE':
+            try:
+                progress_ok = await self._check_dynamic_progress(
+                    started, safe_content=True
+                )
+            except Exception as error:
+                progress_ok = False
+                reconcile_reason = f'{reconcile_reason};progress={error}'
+            if progress_ok:
+                self._set_dynamic_update_result('R_SAFE_FALLBACK')
+                self._dynamic_update_state = 'SAFE_RECONCILED'
+                self._full_update_event(
+                    'dynamic_update_skipped',
+                    reason='second_full_push_failed_safe_mission_confirmed',
+                    mission_state='SAFE',
+                    r_source='SAFE',
+                )
+                return
+            self._dynamic_manual_failure(
+                'UNKNOWN',
+                f'safe mission confirmed but progress unknown: {reconcile_reason}',
+                'mission_progress_unknown',
+            )
+            return
+
+        if mission_state == 'DYNAMIC':
+            # A service error can occur after the FCU accepted the full mission.
+            # Treat it as success only if the original deadline still holds and
+            # mission progress can be verified; never issue a compensating write.
+            try:
+                self._require_dynamic_operation_allowed(
+                    started, 'reconciled_dynamic_commit'
+                )
+                progress_ok = await self._check_dynamic_progress(started)
+            except Exception as error:
+                progress_ok = False
+                reconcile_reason = f'{reconcile_reason};progress={error}'
+            if progress_ok:
+                verify_reason = f'reconciled_after_error:{reconcile_reason}'
+                committed = self._commit_dynamic_r_verified(
+                    candidate,
+                    expected,
+                    started,
+                    durations.get('calc_duration_ms', 0.0),
+                    durations.get('push_duration_ms', 0.0),
+                    durations.get('verify_duration_ms', 0.0),
+                    verify_reason,
+                    durations.get('verify_cpu_duration_ms', 0.0),
+                )
+                if committed:
+                    return
+            self._dynamic_manual_failure(
+                'DYNAMIC',
+                f'dynamic mission present but could not be safely committed: {reconcile_reason}',
+                'dynamic_mission_failed',
+            )
+            return
+
+        self._dynamic_manual_failure(
+            mission_state,
+            f'{failure_reason}; reconciliation={reconcile_reason}',
+            'mission_inconsistent' if mission_state == 'INCONSISTENT'
+            else 'mission_state_unknown',
+        )
 
     def _commit_dynamic_r_verified(
         self,
