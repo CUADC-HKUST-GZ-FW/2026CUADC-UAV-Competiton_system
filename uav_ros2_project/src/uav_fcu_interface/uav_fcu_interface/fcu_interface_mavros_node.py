@@ -2159,6 +2159,22 @@ class FcuInterfaceMavrosNode(Node):
         }, 'ok'
 
     def _compute_predicted_dynamic_r(self, b_snapshot, target_c):
+        """Compute dynamic R from AB samples and the configured attack altitude.
+
+        AB samples are used to estimate the forward ground speed (therefore
+        naturally capturing first-order headwind/tailwind effects).  The
+        ballistic release state is constrained by the commanded attack
+        altitude instead of extrapolating the short AB vertical-speed trend
+        all the way to R.  ArduPlane is actively tracking the mission altitude
+        on U/R, so the release-state model assumes level flight at R:
+
+            h_R = mission_altitude_m
+            vz_R = 0
+
+        The measured/fitted AB vertical state remains in ``prediction`` for
+        diagnostics and later model refinement, but it does not bias the
+        ballistic height calculation.
+        """
         prediction, reason = self._dynamic_prediction_inputs(b_snapshot)
         if prediction is None:
             return {
@@ -2181,152 +2197,86 @@ class FcuInterfaceMavrosNode(Node):
                 'prediction': prediction,
             }
 
-        rc_guess = float(self.release_offset_m)
-        if not rc_min <= rc_guess <= rc_max:
+        predicted_height_r_m = float(self.mission_altitude_m)
+        predicted_vz_r_mps = 0.0
+        if not math.isfinite(predicted_height_r_m) or predicted_height_r_m <= 0.0:
             return {
                 'valid': False,
                 'lat': None,
                 'lon': None,
                 'alt': None,
-                'reason': 'safe_rc_outside_dynamic_bounds',
+                'reason': 'mission_altitude_invalid_for_ballistics',
                 'prediction': prediction,
             }
 
         g_mps2 = 9.80665
-        iterations = []
-        converged = False
-        rc_new = rc_guess
-        final_state = None
-        for iteration in range(1, self.dynamic_r_max_iterations + 1):
-            distance_b_to_r_m = self.b_offset_m - rc_guess
-            if distance_b_to_r_m <= 0.0:
-                return {
-                    'valid': False,
-                    'lat': None,
-                    'lon': None,
-                    'alt': None,
-                    'reason': 'predicted_r_not_after_b',
-                    'prediction': prediction,
-                    'iterations': iterations,
-                }
-            t_br_sec = distance_b_to_r_m / prediction['v_forward_mean_mps']
-            vz_b = prediction['vz_est_mps']
-            az = prediction['vz_trend_mps2']
-            # When the fitted vertical trend is clearly damping climb/descent
-            # toward level flight, do not extrapolate the same acceleration
-            # through zero and invent a climb/descent reversal.  ABURCD uses a
-            # common relative-altitude target, so level-off is the conservative
-            # short-horizon continuation after the fitted zero crossing.
-            zero_crossing_sec = None
-            if vz_b * az < 0.0 and abs(az) > 1.0e-6:
-                candidate_zero_crossing = -vz_b / az
-                if 0.0 < candidate_zero_crossing < t_br_sec:
-                    zero_crossing_sec = candidate_zero_crossing
-            if zero_crossing_sec is not None:
-                predicted_vz_r_mps = 0.0
-                predicted_height_r_m = (
-                    prediction['height_b_m']
-                    + vz_b * zero_crossing_sec
-                    + 0.5 * az * zero_crossing_sec ** 2
-                )
-                vertical_prediction_mode = 'trend_to_level'
-            else:
-                predicted_vz_r_mps = vz_b + az * t_br_sec
-                predicted_height_r_m = (
-                    prediction['height_b_m']
-                    + vz_b * t_br_sec
-                    + 0.5 * az * t_br_sec ** 2
-                )
-                vertical_prediction_mode = prediction['vz_estimation_mode']
-            if (
-                not math.isfinite(predicted_height_r_m)
-                or predicted_height_r_m <= 0.0
-                or not math.isfinite(predicted_vz_r_mps)
-            ):
-                return {
-                    'valid': False,
-                    'lat': None,
-                    'lon': None,
-                    'alt': None,
-                    'reason': 'predicted_release_state_invalid',
-                    'prediction': prediction,
-                    'iterations': iterations,
-                }
-            discriminant = (
-                predicted_vz_r_mps ** 2
-                + 2.0 * g_mps2 * predicted_height_r_m
-            )
-            if not math.isfinite(discriminant) or discriminant <= 0.0:
-                return {
-                    'valid': False,
-                    'lat': None,
-                    'lon': None,
-                    'alt': None,
-                    'reason': 'ballistic_discriminant_invalid',
-                    'prediction': prediction,
-                    'iterations': iterations,
-                }
-            fall_time_sec = (
-                predicted_vz_r_mps + math.sqrt(discriminant)
-            ) / g_mps2
-            if not math.isfinite(fall_time_sec) or fall_time_sec <= 0.0:
-                return {
-                    'valid': False,
-                    'lat': None,
-                    'lon': None,
-                    'alt': None,
-                    'reason': 'fall_time_invalid',
-                    'prediction': prediction,
-                    'iterations': iterations,
-                }
-            rc_new = prediction['v_forward_mean_mps'] * (
-                fall_time_sec + self.dynamic_r_release_delay_sec
-            )
-            delta_rc_m = abs(rc_new - rc_guess)
-            final_state = {
-                'predicted_height_r_m': predicted_height_r_m,
-                'predicted_vz_r_mps': predicted_vz_r_mps,
-                'predicted_v_forward_r_mps': prediction['v_forward_mean_mps'],
-                'fall_time_sec': fall_time_sec,
-                'vertical_prediction_mode': vertical_prediction_mode,
-                'vertical_zero_crossing_sec': zero_crossing_sec,
-            }
-            iterations.append({
-                'iteration': iteration,
-                'rc_guess_m': rc_guess,
-                'distance_b_to_r_m': distance_b_to_r_m,
-                't_br_sec': t_br_sec,
-                **final_state,
-                'rc_new_m': rc_new,
-                'delta_rc_m': delta_rc_m,
-            })
-            if not rc_min <= rc_new <= rc_max:
-                return {
-                    'valid': False,
-                    'lat': None,
-                    'lon': None,
-                    'alt': None,
-                    'reason': 'rc_out_of_range',
-                    'prediction': prediction,
-                    'iterations': iterations,
-                    'rc_dynamic_m': rc_new,
-                }
-            if delta_rc_m <= self.dynamic_r_convergence_m:
-                converged = True
-                break
-            rc_guess = rc_new
-
-        if not converged or final_state is None:
+        fall_time_sec = math.sqrt(2.0 * predicted_height_r_m / g_mps2)
+        if not math.isfinite(fall_time_sec) or fall_time_sec <= 0.0:
             return {
                 'valid': False,
                 'lat': None,
                 'lon': None,
                 'alt': None,
-                'reason': 'rc_iteration_not_converged',
+                'reason': 'fall_time_invalid',
                 'prediction': prediction,
-                'iterations': iterations,
+            }
+
+        rc_new = prediction['v_forward_mean_mps'] * (
+            fall_time_sec + self.dynamic_r_release_delay_sec
+        )
+        if not math.isfinite(rc_new):
+            return {
+                'valid': False,
+                'lat': None,
+                'lon': None,
+                'alt': None,
+                'reason': 'rc_non_finite',
+                'prediction': prediction,
+            }
+        if not rc_min <= rc_new <= rc_max:
+            return {
+                'valid': False,
+                'lat': None,
+                'lon': None,
+                'alt': None,
+                'reason': 'rc_out_of_range',
+                'prediction': prediction,
                 'rc_dynamic_m': rc_new,
             }
+
+        # B->R time is retained as a diagnostic only.  It no longer feeds a
+        # free vertical extrapolation because R is altitude-controlled.
+        distance_b_to_r_m = self.b_offset_m - rc_new
+        if distance_b_to_r_m <= 0.0:
+            return {
+                'valid': False,
+                'lat': None,
+                'lon': None,
+                'alt': None,
+                'reason': 'predicted_r_not_after_b',
+                'prediction': prediction,
+                'rc_dynamic_m': rc_new,
+            }
+        t_br_sec = distance_b_to_r_m / prediction['v_forward_mean_mps']
+
+        final_state = {
+            'predicted_height_r_m': predicted_height_r_m,
+            'predicted_vz_r_mps': predicted_vz_r_mps,
+            'predicted_v_forward_r_mps': prediction['v_forward_mean_mps'],
+            'fall_time_sec': fall_time_sec,
+            'vertical_prediction_mode': 'mission_altitude_level',
+            'vertical_zero_crossing_sec': None,
+            'commanded_altitude_r_m': predicted_height_r_m,
+        }
+        iterations = [{
+            'iteration': 1,
+            'rc_guess_m': self.release_offset_m,
+            'distance_b_to_r_m': distance_b_to_r_m,
+            't_br_sec': t_br_sec,
+            **final_state,
+            'rc_new_m': rc_new,
+            'delta_rc_m': abs(rc_new - float(self.release_offset_m)),
+        }]
 
         lat, lon = self.destination_point(
             float(target_c['lat']),
@@ -2336,7 +2286,7 @@ class FcuInterfaceMavrosNode(Node):
         )
         prediction.update(final_state)
         prediction.update({
-            'iteration_count': len(iterations),
+            'iteration_count': 1,
             'converged': True,
             'rc_dynamic_m': rc_new,
             'release_delay_sec': self.dynamic_r_release_delay_sec,
