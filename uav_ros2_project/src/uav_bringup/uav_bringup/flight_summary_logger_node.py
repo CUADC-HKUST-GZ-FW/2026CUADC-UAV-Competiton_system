@@ -281,9 +281,23 @@ class FlightSummaryLoggerNode(Node):
                     stream.write(json.dumps(metric_record, ensure_ascii=False))
                     stream.write('\n')
 
-    # Keep detailed dynamic-R pipeline telemetry in all_nodes.log and
-    # aburcd_update_metrics.jsonl.  The human summary only shows decisions,
-    # results, and the key coordinates needed for flight review.
+    # HUMAN-SUMMARY READABILITY CONTRACT
+    # ----------------------------------
+    # flight_summary.log is a REVIEW document, not a debug trace. Keep it
+    # short enough that a person can understand one flight by scrolling once.
+    #
+    # Rules for future changes:
+    #   1. Do NOT dump raw event dictionaries or every telemetry field here.
+    #   2. High-rate / intermediate algorithm events belong in all_nodes.log
+    #      and aburcd_update_metrics.jsonl, not in flight_summary.log.
+    #   3. A new event must get an explicit, compact formatter below before it
+    #      is allowed into the human summary. Unknown events are intentionally
+    #      omitted rather than expanded automatically.
+    #   4. Routine events should normally fit in 1-3 lines. Only final result
+    #      and failure blocks may be longer.
+    #
+    # This contract is intentional: previous regressions happened when new
+    # dynamic-R fields/events were automatically rendered into the summary.
     _SUMMARY_SUPPRESSED_EVENTS = {
         'mission_current_a', 'mission_current_u', 'mission_current_r',
         'u_reached', 'b_state_frozen', 'ab_prediction_input',
@@ -423,18 +437,13 @@ class FlightSummaryLoggerNode(Node):
             if task_id not in {'', 'none'}:
                 lines.append(f'  task: {task_id}')
             lines.extend([
-                f'  lat: {float(record.get("latitude", 0.0)):.7f}',
-                f'  lon: {float(record.get("longitude", 0.0)):.7f}',
+                f'  lat/lon: {float(record.get("latitude", 0.0)):.7f}, '
+                f'{float(record.get("longitude", 0.0)):.7f}',
                 f'  heading: {float(record.get("heading_deg", 0.0)):.1f} deg',
-                f'  source topic: {record.get("source_topic", self.target_topic)}',
-                f'  source node: {record.get("source_node", "UNKNOWN")}',
             ])
-            resolution = record.get('source_resolution')
-            if resolution:
-                lines.append(f'  source resolution: {resolution}')
-            publisher_count = record.get('publisher_count')
-            if publisher_count is not None:
-                lines.append(f'  publisher count: {publisher_count}')
+            source_node = str(record.get('source_node', '')).strip()
+            if source_node and source_node != 'UNKNOWN':
+                lines.append(f'  source: {source_node}')
             return '\n'.join(lines)
 
         if event == 'composite_mission_uploaded':
@@ -446,11 +455,11 @@ class FlightSummaryLoggerNode(Node):
                 f'  verified: {"YES" if record.get("verified") else "NO"}',
             ]
             if isinstance(self.safe_r_point, dict):
-                lines.extend([
-                    '  R safe:',
-                    f'    lat: {float(self.safe_r_point["lat"]):.7f}',
-                    f'    lon: {float(self.safe_r_point["lon"]):.7f}',
-                ])
+                lines.append(
+                    '  R safe: '
+                    f'{float(self.safe_r_point["lat"]):.7f}, '
+                    f'{float(self.safe_r_point["lon"]):.7f}'
+                )
             return '\n'.join(lines)
 
         if event == 'a_reached':
@@ -470,35 +479,34 @@ class FlightSummaryLoggerNode(Node):
             return '\n'.join(lines)
 
         if event == 'r_calc_done':
+            # Human summary keeps the *decision*, not the prediction trace.
+            # Fit samples/trends/iterations stay in aburcd_update_metrics.jsonl.
             lines = [f'[{timestamp}] DYNAMIC  R calculated']
             if isinstance(self.safe_r_point, dict):
-                lines.extend([
-                    '  R safe:',
-                    f'    lat: {float(self.safe_r_point["lat"]):.7f}',
-                    f'    lon: {float(self.safe_r_point["lon"]):.7f}',
-                ])
+                lines.append(
+                    '  safe -> dynamic: '
+                    f'{float(self.safe_r_point["lat"]):.7f}, '
+                    f'{float(self.safe_r_point["lon"]):.7f}'
+                )
             dyn_lat = record.get('dynamic_r_lat')
             dyn_lon = record.get('dynamic_r_lon')
             if isinstance(dyn_lat, (int, float)) and isinstance(dyn_lon, (int, float)):
-                lines.extend([
-                    '  R dynamic:',
-                    f'    lat: {float(dyn_lat):.7f}',
-                    f'    lon: {float(dyn_lon):.7f}',
-                ])
+                prefix = '             -> ' if isinstance(self.safe_r_point, dict) else '  dynamic: '
+                lines.append(
+                    f'{prefix}{float(dyn_lat):.7f}, {float(dyn_lon):.7f}'
+                )
+            metrics = []
             if isinstance(record.get('rc_dynamic_m'), (int, float)):
-                lines.append(f'  dynamic RC: {float(record["rc_dynamic_m"]):.2f} m')
+                metrics.append(f'RC={float(record["rc_dynamic_m"]):.2f} m')
             speed = record.get('predicted_v_forward_mps')
             if not isinstance(speed, (int, float)):
                 speed = record.get('predicted_v_forward_r_mps')
             if isinstance(speed, (int, float)):
-                lines.append(f'  forward speed: {float(speed):.2f} m/s')
-            if isinstance(record.get('predicted_height_r_m'), (int, float)):
-                lines.append(
-                    f'  target altitude: '
-                    f'{float(record["predicted_height_r_m"]):.2f} m'
-                )
+                metrics.append(f'V={float(speed):.2f} m/s')
             if isinstance(record.get('fall_time_sec'), (int, float)):
-                lines.append(f'  fall time: {float(record["fall_time_sec"]):.2f} s')
+                metrics.append(f'fall={float(record["fall_time_sec"]):.2f} s')
+            if metrics:
+                lines.append('  ' + '  '.join(metrics))
             return '\n'.join(lines)
 
         if event in {
@@ -701,31 +709,16 @@ class FlightSummaryLoggerNode(Node):
             if isinstance(gps, dict):
                 latitude = gps.get('latitude')
                 longitude = gps.get('longitude')
-            lines.extend([
-                '  servo/PWM confirmed lat: '
-                + (
-                    f'{float(latitude):.7f}'
-                    if isinstance(latitude, (int, float)) else 'unknown'
-                ),
-                '  servo/PWM confirmed lon: '
-                + (
-                    f'{float(longitude):.7f}'
-                    if isinstance(longitude, (int, float)) else 'unknown'
-                ),
-            ])
-            for key, label, suffix in (
-                ('relative_altitude_m', 'relative altitude', ' m'),
-                ('groundspeed_mps', 'groundspeed', ' m/s'),
-                ('airspeed_mps', 'airspeed', ' m/s'),
-                ('wind_speed_mps', 'wind speed', ' m/s'),
-                ('distance_to_r_m', 'distance to R', ' m'),
-            ):
+            if isinstance(latitude, (int, float)) and isinstance(longitude, (int, float)):
                 lines.append(
-                    f'  {label}: {self._format_number(record.get(key), suffix)}'
+                    f'  position: {float(latitude):.7f}, {float(longitude):.7f}'
                 )
-            wind_age = record.get('wind_age_sec')
-            if isinstance(wind_age, (int, float)) and math.isfinite(float(wind_age)):
-                lines.append(f'  wind estimate age: {float(wind_age):.2f} s')
+            altitude = self._format_number(record.get('relative_altitude_m'), ' m')
+            groundspeed = self._format_number(record.get('groundspeed_mps'), ' m/s')
+            wind = self._format_number(record.get('wind_speed_mps'), ' m/s')
+            lines.append(
+                f'  state: h={altitude}  ground={groundspeed}  wind={wind}'
+            )
             pwm = record.get('observed_pwm', record.get('expected_pwm'))
             lines.append(f'  PWM: {pwm if pwm is not None else "unknown"}')
             return '\n'.join(lines)
@@ -818,18 +811,15 @@ class FlightSummaryLoggerNode(Node):
         if event == 'waypoint_reached':
             return f'[{timestamp}] WP       Waypoint seq {record.get("seq")} reached'
 
-        # Unknown FCU summary events are still kept, so future failures/reasons
-        # are not silently discarded.
-        lines = [f'[{timestamp}] EVENT    {event.replace("_", " ")}']
-        for key, value in record.items():
-            if key in {'time', 'event', 'task_id', 'raw', 'points'} or value is None:
-                continue
-            if isinstance(value, bool):
-                value = 'YES' if value else 'NO'
-            elif isinstance(value, float):
-                value = f'{value:.2f}' if math.isfinite(value) else str(value)
-            lines.append(f'  {key.replace("_", " ")}: {value}')
-        return '\n'.join(lines)
+        # READABILITY GUARD: unknown/new events are NOT expanded into the
+        # human summary. They are still available in all_nodes.log and, for
+        # ABURCD events, aburcd_update_metrics.jsonl. If a new event is useful
+        # for flight review, add an explicit compact formatter above.
+        #
+        # Do not restore a generic ``for key, value in record.items()`` dump
+        # here: that was the main cause of flight_summary.log becoming noisy
+        # again whenever developers added telemetry fields.
+        return None
 
     @staticmethod
     def _format_number(value, suffix=''):
