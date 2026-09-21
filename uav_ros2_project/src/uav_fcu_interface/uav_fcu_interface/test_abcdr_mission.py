@@ -754,7 +754,7 @@ def test_virtual_b_crossing_triggers_once_only_while_u_is_current():
     assert snapshots[0]['ground_speed_mps'] == 21.0
 
 
-def test_dynamic_r_second_full_upload_changes_only_r_and_verifies_pullback():
+def test_dynamic_r_second_full_upload_changes_only_r_and_uses_push_ack():
     node, points, mission, events = prepare_dynamic_update_node()
     full_calls = []
     uploaded = None
@@ -765,7 +765,10 @@ def test_dynamic_r_second_full_upload_changes_only_r_and_verifies_pullback():
         full_calls.append((retry, started_monotonic, len(waypoints)))
         return SimpleNamespace(success=True, wp_transfered=len(waypoints))
 
+    pull_calls = []
+
     async def pull(_started, reconcile=False):
+        pull_calls.append(reconcile)
         return SimpleNamespace(
             current_seq=node.composite_seq_u,
             waypoints=[node.clone_waypoint(wp) for wp in uploaded],
@@ -795,7 +798,12 @@ def test_dynamic_r_second_full_upload_changes_only_r_and_verifies_pullback():
     assert node.composite_expected_waypoints[8].param2 == mission[8].param2
     assert node.composite_expected_waypoints[9].x_lat == mission[9].x_lat
     assert node._dynamic_update_verified
-    assert 'dynamic_mission_verified' in [name for name, _ in events]
+    assert pull_calls == []
+    names = [name for name, _ in events]
+    assert 'second_full_push_ack_confirmed' in names
+    assert 'second_full_pull_start' not in names
+    assert 'second_full_verify_pass' not in names
+    assert 'dynamic_mission_verified' in names
 
 
 def _commit_verified_for_test(node, points, mission):

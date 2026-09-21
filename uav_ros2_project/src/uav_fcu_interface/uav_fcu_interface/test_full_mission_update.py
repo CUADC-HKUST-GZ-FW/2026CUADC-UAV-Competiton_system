@@ -73,10 +73,30 @@ def test_second_full_upload_replaces_complete_mission_and_changes_only_r():
     assert node._dynamic_update_verified
     names = [name for name, _fields in events]
     assert names.index('second_full_push_start') < names.index('second_full_push_done')
-    assert names.index('second_full_pull_done') < names.index('second_full_verify_pass')
+    assert names.index('second_full_push_done') < names.index('second_full_push_ack_confirmed')
+    assert 'second_full_pull_start' not in names
+    assert 'second_full_pull_done' not in names
+    assert 'second_full_verify_start' not in names
+    assert 'second_full_verify_pass' not in names
+    assert not [call for call in calls if call[0] == 'pull']
     assert names.index('mission_progress_accepted') < names.index('dynamic_mission_verified')
     safe[7].x_lat += 1.0
     assert node.safe_composite_mission[7].x_lat != safe[7].x_lat
+
+
+def test_successful_second_full_push_does_not_pull_back():
+    node, _points, _mission, events, calls = _scenario()
+
+    _run(node)
+
+    assert [call for call in calls if call[0] == 'pull'] == []
+    names = [name for name, _fields in events]
+    assert 'second_full_push_ack_confirmed' in names
+    assert 'dynamic_mission_verified' in names
+    verified = [fields for name, fields in events
+                if name == 'dynamic_mission_verified'][-1]
+    assert verified['verify_duration_ms'] == 0.0
+    assert 'push_ack_full_transfer=true' in verified['verification_reason']
 
 
 @pytest.mark.parametrize(

@@ -2688,7 +2688,12 @@ class FcuInterfaceMavrosNode(Node):
         )
         try:
             # Deliberately no service retry for the in-flight replacement.
-            await self.push_mission_async(
+            # WaypointPush success + full transfer count is the FCU/MAVROS ACK
+            # for the second complete mission replacement.  The normal success
+            # path intentionally does not perform a second full WaypointPull;
+            # this keeps the in-flight R update deadline independent of a
+            # 14-item read-back transaction.
+            push_result = await self.push_mission_async(
                 expected, retry=False, started_monotonic=started
             )
         except Exception as error:
@@ -2713,62 +2718,31 @@ class FcuInterfaceMavrosNode(Node):
             waypoint_count=len(expected),
             push_duration_ms=push_duration_ms,
             second_full_push_duration_ms=push_duration_ms,
+            transferred=int(getattr(push_result, 'wp_transfered', -1)),
         )
 
-        self._require_dynamic_operation_allowed(started, 'before_second_full_pull')
-        self._dynamic_update_state = 'VERIFYING'
-        pull_started = time.monotonic()
-        self._dynamic_metrics['second_full_pull_start'] = pull_started
-        self._full_update_event('second_full_pull_start')
-        try:
-            pulled = await self._pull_dynamic_mission_async(started)
-        except Exception as error:
-            await self._handle_dynamic_full_update_failure_async(
-                candidate,
-                expected,
-                started,
-                f'second_full_pull_failed:{error}',
-                calc_duration_ms=calc_duration_ms,
-                push_duration_ms=push_duration_ms,
-            )
-            return
-
-        pull_duration_ms = (time.monotonic() - pull_started) * 1000.0
-        self._dynamic_metrics.update(
-            second_full_pull_done=time.monotonic(),
-            second_full_pull_duration_ms=pull_duration_ms,
+        # Fast verification path: the push service has already required both
+        # success=true and wp_transfered == len(expected).  Confirm the live
+        # mission state still makes the ACK usable, then use the existing
+        # progress/deadline check.  Do not perform a normal full pull-back here.
+        self._require_dynamic_operation_allowed(started, 'after_second_full_push_ack')
+        self._dynamic_update_state = 'ACK_VERIFYING'
+        state_ok, state_reason = self._confirm_dynamic_push_ack_state(
+            expected, push_result, started
         )
-        self._full_update_event(
-            'second_full_pull_done',
-            second_full_pull_duration_ms=pull_duration_ms,
-        )
-
-        self._require_dynamic_operation_allowed(started, 'before_second_full_verify')
-        verify_started = time.monotonic()
-        self._dynamic_metrics['second_full_verify_start'] = verify_started
-        self._full_update_event('second_full_verify_start')
-        actual = list(pulled.waypoints)
-        ok, reason = self.verify_temporary_mission(expected, actual)
-        verify_cpu_duration_ms = (time.monotonic() - verify_started) * 1000.0
-        self._dynamic_metrics.update(
-            second_full_verify_done=time.monotonic(),
-            verify_cpu_duration_ms=verify_cpu_duration_ms,
-        )
-        if not ok:
-            await self._handle_dynamic_full_update_failure_async(
-                candidate,
-                expected,
-                started,
-                f'second_full_verify_failed:{reason}',
-                calc_duration_ms=calc_duration_ms,
-                push_duration_ms=push_duration_ms,
-                verify_duration_ms=pull_duration_ms,
-                verify_cpu_duration_ms=verify_cpu_duration_ms,
+        if not state_ok:
+            self._dynamic_manual_failure(
+                'UNKNOWN',
+                f'second full push ACK state confirmation failed: {state_reason}',
+                'dynamic_push_state_unconfirmed',
             )
             return
 
         self._full_update_event(
-            'second_full_verify_pass', verification_reason=reason
+            'second_full_push_ack_confirmed',
+            verification_reason=state_reason,
+            transferred=int(getattr(push_result, 'wp_transfered', -1)),
+            expected_count=len(expected),
         )
 
         progress_ok = await self._check_dynamic_progress(started)
@@ -2780,14 +2754,56 @@ class FcuInterfaceMavrosNode(Node):
             )
             return
 
-        self._require_dynamic_operation_allowed(started, 'final_verify_commit')
+        self._require_dynamic_operation_allowed(started, 'final_ack_commit')
         committed = self._commit_dynamic_r_verified(
             candidate, expected, started, calc_duration_ms,
-            push_duration_ms, pull_duration_ms, reason,
-            verify_cpu_duration_ms,
+            push_duration_ms, 0.0, state_reason,
+            0.0,
         )
         if not committed:
             self._finish_dynamic_abort('deadline changed before commit', started)
+
+    def _confirm_dynamic_push_ack_state(self, expected, push_result, started):
+        """Validate the live state needed to trust a successful full-push ACK.
+
+        This deliberately does not claim byte-for-byte FCU mission read-back
+        verification.  It confirms the service ACK transferred the complete
+        replacement and that live mission progress still has R in the future.
+        Failed push transactions still use the read-only pull reconciliation
+        path in ``_handle_dynamic_full_update_failure_async``.
+        """
+        transferred = int(getattr(push_result, 'wp_transfered', -1))
+        expected_count = len(expected)
+        if not bool(getattr(push_result, 'success', False)):
+            return False, 'push_ack_success_false'
+        if transferred != expected_count:
+            return False, (
+                f'push_ack_transfer_count_mismatch:{transferred}!={expected_count}'
+            )
+        if self.mission_type != 'COMPOSITE':
+            return False, f'mission_type_not_composite:{self.mission_type}'
+
+        with self._dynamic_state_lock:
+            reason = self._dynamic_abort_reason_locked(started)
+            if reason:
+                raise DynamicUpdateAborted(f'push_ack_state:{reason}')
+            current = self._current_mission_seq()
+            reached = self.last_reached_seq
+            r_seq = int(self.dynamic_indices['R'])
+            if current is None or current < 1 or current >= expected_count:
+                return False, f'invalid_current_seq:{current}'
+            if reached >= r_seq or current >= r_seq:
+                raise DynamicUpdateAborted(
+                    f'push_ack_state:r_not_future;current={current};reached={reached}'
+                )
+            state = self.current_state
+            if state is not None and not bool(getattr(state, 'connected', False)):
+                return False, 'fcu_not_connected_after_push_ack'
+
+        return True, (
+            f'push_ack_full_transfer=true;count={expected_count};'
+            f'current_seq={current};last_reached_seq={reached};r_still_future=true'
+        )
 
     async def _pull_dynamic_mission_async(self, started, *, reconcile=False):
         """Pull the complete FCU mission.
