@@ -12,6 +12,7 @@ import threading
 import time
 
 from diagnostic_msgs.msg import DiagnosticArray
+from geometry_msgs.msg import TwistWithCovarianceStamped
 from mavros_msgs.msg import State, VfrHud, WaypointList, WaypointReached
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -77,6 +78,10 @@ class FlightSummaryLoggerNode(Node):
         self._target_publisher_cache_monotonic = 0.0
         self._target_publisher_cache_max_age_sec = 5.0
         self.r_point = None
+        self.safe_r_point = None
+        self.dynamic_r_point = None
+        self.last_wind = None
+        self.release_snapshot = None
         self.nearest_c_distance_m = None
         self.nearest_c_sample = None
         self._last_c_distance_log_time = 0.0
@@ -176,6 +181,12 @@ class FlightSummaryLoggerNode(Node):
             sensor_qos,
         )
         self.create_subscription(
+            TwistWithCovarianceStamped,
+            '/mavros/wind_estimation',
+            self.wind_callback,
+            sensor_qos,
+        )
+        self.create_subscription(
             State,
             '/mavros/state',
             self.state_callback,
@@ -241,16 +252,19 @@ class FlightSummaryLoggerNode(Node):
         }
         record.update(fields)
 
-        text = self._format_human_event(record)
+        text = None
+        if event not in self._SUMMARY_SUPPRESSED_EVENTS:
+            text = self._format_human_event(record)
 
         with self._lock:
-            with open(
-                self.summary_path,
-                'a',
-                encoding='utf-8',
-            ) as stream:
-                stream.write(text)
-                stream.write('\n')
+            if text:
+                with open(
+                    self.summary_path,
+                    'a',
+                    encoding='utf-8',
+                ) as stream:
+                    stream.write(text)
+                    stream.write('\n')
             if (
                 self.aburcd_update_metrics_enabled
                 and event in self._ABURCD_EVENTS
@@ -266,6 +280,20 @@ class FlightSummaryLoggerNode(Node):
                 ) as stream:
                     stream.write(json.dumps(metric_record, ensure_ascii=False))
                     stream.write('\n')
+
+    # Keep detailed dynamic-R pipeline telemetry in all_nodes.log and
+    # aburcd_update_metrics.jsonl.  The human summary only shows decisions,
+    # results, and the key coordinates needed for flight review.
+    _SUMMARY_SUPPRESSED_EVENTS = {
+        'mission_current_a', 'mission_current_u', 'mission_current_r',
+        'u_reached', 'b_state_frozen', 'ab_prediction_input',
+        'r_prediction_iteration', 'r_calc_start', 'release_state_actual',
+        'second_full_push_start', 'second_full_push_done',
+        'second_full_pull_start', 'second_full_pull_done',
+        'second_full_verify_start', 'second_full_verify_pass',
+        'mission_progress_check', 'mission_progress_safe',
+        'mission_progress_accepted', 'r_reached_local_observation',
+    }
 
     _ABURCD_EVENTS = {
         'second_full_verify_start', 'second_full_verify_pass',
@@ -320,6 +348,8 @@ class FlightSummaryLoggerNode(Node):
         'predicted_vertical_speed_r_mps', 'actual_vertical_speed_r_mps',
         'vertical_speed_prediction_error_mps', 'actual_height_r_m',
         'height_prediction_error_m', 'prediction_source',
+        'commanded_altitude_r_m', 'dynamic_r_lat', 'dynamic_r_lon',
+        'dynamic_r_alt',
     )
     _ABURCD_HUMAN_FIELDS = (
         'current_seq', 'reached_seq', 'r_seq', 'snapshot_latency_ms',
@@ -408,50 +438,121 @@ class FlightSummaryLoggerNode(Node):
             return '\n'.join(lines)
 
         if event == 'composite_mission_uploaded':
-            return (
-                f'[{timestamp}] MISSION  Composite mission uploaded\n'
-                f'  original: {record.get("original_count")}  '
-                f'composite: {record.get("total_count")}\n'
-                f'  A={record.get("a_seq")} '
-                f'U={record.get("u_seq")} '
-                f'R={record.get("r_seq")} '
-                f'RELEASE={record.get("release_seq")} '
-                f'D={record.get("d_seq")}\n'
-                f'  verified: {"YES" if record.get("verified") else "NO"}'
-            )
+            lines = [
+                f'[{timestamp}] MISSION  Attack mission uploaded',
+                f'  A={record.get("a_seq")} U={record.get("u_seq")} '
+                f'R={record.get("r_seq")} RELEASE={record.get("release_seq")} '
+                f'D={record.get("d_seq")}',
+                f'  verified: {"YES" if record.get("verified") else "NO"}',
+            ]
+            if isinstance(self.safe_r_point, dict):
+                lines.extend([
+                    '  R safe:',
+                    f'    lat: {float(self.safe_r_point["lat"]):.7f}',
+                    f'    lon: {float(self.safe_r_point["lon"]):.7f}',
+                ])
+            return '\n'.join(lines)
+
+        if event == 'a_reached':
+            return f'[{timestamp}] ATTACK   A reached'
+
+        if event == 'b_crossed':
+            lines = [f'[{timestamp}] ATTACK   B crossed']
+            if isinstance(record.get('ground_speed_mps'), (int, float)):
+                lines.append(
+                    f'  ground speed: {float(record["ground_speed_mps"]):.2f} m/s'
+                )
+            if isinstance(record.get('relative_altitude_m'), (int, float)):
+                lines.append(
+                    f'  relative altitude: '
+                    f'{float(record["relative_altitude_m"]):.2f} m'
+                )
+            return '\n'.join(lines)
+
+        if event == 'r_calc_done':
+            lines = [f'[{timestamp}] DYNAMIC  R calculated']
+            if isinstance(self.safe_r_point, dict):
+                lines.extend([
+                    '  R safe:',
+                    f'    lat: {float(self.safe_r_point["lat"]):.7f}',
+                    f'    lon: {float(self.safe_r_point["lon"]):.7f}',
+                ])
+            dyn_lat = record.get('dynamic_r_lat')
+            dyn_lon = record.get('dynamic_r_lon')
+            if isinstance(dyn_lat, (int, float)) and isinstance(dyn_lon, (int, float)):
+                lines.extend([
+                    '  R dynamic:',
+                    f'    lat: {float(dyn_lat):.7f}',
+                    f'    lon: {float(dyn_lon):.7f}',
+                ])
+            if isinstance(record.get('rc_dynamic_m'), (int, float)):
+                lines.append(f'  dynamic RC: {float(record["rc_dynamic_m"]):.2f} m')
+            speed = record.get('predicted_v_forward_mps')
+            if not isinstance(speed, (int, float)):
+                speed = record.get('predicted_v_forward_r_mps')
+            if isinstance(speed, (int, float)):
+                lines.append(f'  forward speed: {float(speed):.2f} m/s')
+            if isinstance(record.get('predicted_height_r_m'), (int, float)):
+                lines.append(
+                    f'  target altitude: '
+                    f'{float(record["predicted_height_r_m"]):.2f} m'
+                )
+            if isinstance(record.get('fall_time_sec'), (int, float)):
+                lines.append(f'  fall time: {float(record["fall_time_sec"]):.2f} s')
+            return '\n'.join(lines)
 
         if event in {
             'mission_current_a', 'mission_current_u', 'mission_current_r',
-            'a_reached', 'u_reached',
+            'u_reached',
         }:
             return f'[{timestamp}] ABURCD  {event.upper()}'
 
         if event == 'r_reached':
-            lines = [f'[{timestamp}] ABURCD  R_REACHED']
+            lines = [f'[{timestamp}] ATTACK   R reached']
             if isinstance(self.r_point, dict):
-                lat = self.r_point.get('lat')
-                lon = self.r_point.get('lon')
-                if lat is not None and lon is not None:
-                    lines.extend([
-                        f'  planned R lat: {float(lat):.7f}',
-                        f'  planned R lon: {float(lon):.7f}',
-                    ])
+                lines.extend([
+                    f'  planned R lat: {float(self.r_point["lat"]):.7f}',
+                    f'  planned R lon: {float(self.r_point["lon"]):.7f}',
+                ])
+            if isinstance(record.get('lat'), (int, float)):
+                lines.append(f'  actual lat: {float(record["lat"]):.7f}')
+            if isinstance(record.get('lon'), (int, float)):
+                lines.append(f'  actual lon: {float(record["lon"]):.7f}')
+            if isinstance(record.get('relative_altitude_m'), (int, float)):
+                lines.append(
+                    f'  actual height: {float(record["relative_altitude_m"]):.2f} m'
+                )
+            if isinstance(record.get('vertical_speed_mps'), (int, float)):
+                lines.append(
+                    f'  actual vz: {float(record["vertical_speed_mps"]):.2f} m/s'
+                )
             return '\n'.join(lines)
 
         if event == 'dynamic_mission_verified':
-            return (
-                'DYNAMIC R UPDATE\n'
-                f'  trigger: {record.get("dynamic_trigger_timestamp")}\n'
-                f'  R dynamic: lat={record.get("dynamic_r_lat")} '
-                f'lon={record.get("dynamic_r_lon")} alt={record.get("dynamic_r_alt")}\n'
-                'SECOND FULL MISSION UPDATE\n'
-                f'  push: PASS {record.get("push_duration_ms")} ms\n'
-                f'  pull: PASS {record.get("verify_duration_ms")} ms\n'
-                f'  verify: PASS {record.get("verify_cpu_duration_ms")} ms\n'
-                'DYNAMIC R\n  result: VERIFIED\n'
-                f'  total: {record.get("dynamic_update_total_ms")} ms\n'
-                '  source: DYNAMIC'
-            )
+            lines = [f'[{timestamp}] DYNAMIC  Mission update VERIFIED']
+            if isinstance(self.safe_r_point, dict):
+                lines.append(
+                    '  R safe: '
+                    f'{float(self.safe_r_point["lat"]):.7f}, '
+                    f'{float(self.safe_r_point["lon"]):.7f}'
+                )
+            dyn_lat = record.get('dynamic_r_lat')
+            dyn_lon = record.get('dynamic_r_lon')
+            if isinstance(dyn_lat, (int, float)) and isinstance(dyn_lon, (int, float)):
+                lines.append(
+                    f'  R dynamic: {float(dyn_lat):.7f}, {float(dyn_lon):.7f}'
+                )
+            for key, label, suffix in (
+                ('push_duration_ms', 'push', ' ms'),
+                ('second_full_pull_duration_ms', 'pull', ' ms'),
+                ('dynamic_update_total_ms', 'total update', ' ms'),
+                ('r_commit_margin_sec', 'R commit margin', ' s'),
+            ):
+                value = record.get(key)
+                if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                    lines.append(f'  {label}: {float(value):.3f}{suffix}')
+            return '\n'.join(lines)
+
         if event in {'dynamic_update_skipped', 'dynamic_update_too_late'}:
             return ('DYNAMIC R\n  result: SKIPPED\n'
                     f'  reason: {record.get("reason", record.get("failure_reason"))}\n'
@@ -578,6 +679,18 @@ class FlightSummaryLoggerNode(Node):
             seq = record.get('release_command_seq', record.get('seq'))
             if seq is not None:
                 lines.append(f'  seq: {seq}')
+            gps = record.get('gps')
+            if isinstance(gps, dict):
+                lat = gps.get('latitude')
+                lon = gps.get('longitude')
+                if isinstance(lat, (int, float)):
+                    lines.append(f'  lat: {float(lat):.7f}')
+                if isinstance(lon, (int, float)):
+                    lines.append(f'  lon: {float(lon):.7f}')
+            lines.append(
+                '  wind speed: '
+                + self._format_number(record.get('wind_speed_mps'), ' m/s')
+            )
             return '\n'.join(lines)
 
         if event == 'payload_release_confirmed':
@@ -589,12 +702,12 @@ class FlightSummaryLoggerNode(Node):
                 latitude = gps.get('latitude')
                 longitude = gps.get('longitude')
             lines.extend([
-                '  actual release lat: '
+                '  servo/PWM confirmed lat: '
                 + (
                     f'{float(latitude):.7f}'
                     if isinstance(latitude, (int, float)) else 'unknown'
                 ),
-                '  actual release lon: '
+                '  servo/PWM confirmed lon: '
                 + (
                     f'{float(longitude):.7f}'
                     if isinstance(longitude, (int, float)) else 'unknown'
@@ -604,11 +717,15 @@ class FlightSummaryLoggerNode(Node):
                 ('relative_altitude_m', 'relative altitude', ' m'),
                 ('groundspeed_mps', 'groundspeed', ' m/s'),
                 ('airspeed_mps', 'airspeed', ' m/s'),
+                ('wind_speed_mps', 'wind speed', ' m/s'),
                 ('distance_to_r_m', 'distance to R', ' m'),
             ):
                 lines.append(
                     f'  {label}: {self._format_number(record.get(key), suffix)}'
                 )
+            wind_age = record.get('wind_age_sec')
+            if isinstance(wind_age, (int, float)) and math.isfinite(float(wind_age)):
+                lines.append(f'  wind estimate age: {float(wind_age):.2f} s')
             pwm = record.get('observed_pwm', record.get('expected_pwm'))
             lines.append(f'  PWM: {pwm if pwm is not None else "unknown"}')
             return '\n'.join(lines)
@@ -626,32 +743,58 @@ class FlightSummaryLoggerNode(Node):
             )
 
         if event == 'composite_mission_completed':
-            base = (
-                f'[{timestamp}] RESULT   Attack segment COMPLETE\n'
-                f'  A-B trajectory: '
-                f'{"PASS" if record.get("ab_track_passed") else "FAIL"}\n'
-                f'  C confirmed: '
-                f'{"YES" if record.get("c_confirmed") else "NO"}\n'
-                f'  C min distance: '
-                f'{self._format_number(record.get("c_min_distance_m"), " m")}'
-            )
-            if not getattr(self, 'dynamic_r_enabled', False):
-                return base
-            metric = self._aburcd_metrics
-            return (
-                base
-                + '\n\nABURCD UPDATE SUMMARY\n'
-                + 'Result: '
-                + str(metric.get('result', 'NOT OBSERVED'))
-                + '\nTotal B_CROSSED -> DYNAMIC_MISSION_VERIFIED: '
-                + self._metric_text(
-                    metric.get('dynamic_update_total_ms'), ' ms'
+            lines = [
+                f'[{timestamp}] RESULT   Attack segment COMPLETE',
+                '  A-B trajectory: '
+                + ('PASS' if record.get('ab_track_passed') else 'FAIL'),
+                '  C confirmed: '
+                + ('YES' if record.get('c_confirmed') else 'NO'),
+                '  C min distance: '
+                + self._format_number(record.get('c_min_distance_m'), ' m'),
+            ]
+
+            if isinstance(self.safe_r_point, dict):
+                lines.append(
+                    '  R safe: '
+                    f'{float(self.safe_r_point["lat"]):.7f}, '
+                    f'{float(self.safe_r_point["lon"]):.7f}'
                 )
-                + '\nR commit time margin: '
-                + self._metric_text(metric.get('r_commit_margin_sec'), ' s')
-                + '\nR commit distance margin: '
-                + self._metric_text(metric.get('r_commit_margin_m'), ' m')
-            )
+            if isinstance(self.dynamic_r_point, dict):
+                lines.append(
+                    '  R dynamic: '
+                    f'{float(self.dynamic_r_point["lat"]):.7f}, '
+                    f'{float(self.dynamic_r_point["lon"]):.7f}'
+                )
+
+            metric = self._aburcd_metrics
+            if getattr(self, 'dynamic_r_enabled', False):
+                lines.extend([
+                    '  Dynamic R: ' + str(metric.get('result', 'NOT OBSERVED')),
+                    '  Dynamic update time: '
+                    + self._metric_text(metric.get('dynamic_update_total_ms'), ' ms'),
+                    '  R commit margin: '
+                    + self._metric_text(metric.get('r_commit_margin_sec'), ' s'),
+                ])
+
+            if isinstance(self.release_snapshot, dict):
+                lat = self.release_snapshot.get('latitude')
+                lon = self.release_snapshot.get('longitude')
+                wind = self.release_snapshot.get('wind_speed_mps')
+                lines.append('  Payload release: CONFIRMED')
+                if isinstance(lat, (int, float)):
+                    lines.append(f'  Servo/PWM position lat: {float(lat):.7f}')
+                if isinstance(lon, (int, float)):
+                    lines.append(f'  Servo/PWM position lon: {float(lon):.7f}')
+                lines.append(
+                    '  Wind speed at servo/PWM confirmation: '
+                    + self._format_number(wind, ' m/s')
+                )
+                wind_age = self.release_snapshot.get('wind_age_sec')
+                if isinstance(wind_age, (int, float)):
+                    lines.append(f'  Wind estimate age: {float(wind_age):.2f} s')
+            else:
+                lines.append('  Payload release: NOT OBSERVED')
+            return '\n'.join(lines)
 
         if event == 'fcu_connection_changed':
             return (
@@ -767,6 +910,9 @@ class FlightSummaryLoggerNode(Node):
             self.release_seq = None
             self.d_seq = None
             self.r_point = None
+            self.safe_r_point = None
+            self.dynamic_r_point = None
+            self.release_snapshot = None
             self._r_reached_logged = False
             self._payload_flags.clear()
             self._aburcd_metrics.clear()
@@ -896,19 +1042,21 @@ class FlightSummaryLoggerNode(Node):
                 r_point = points.get('R')
                 if isinstance(r_point, dict):
                     try:
-                        self.r_point = {
+                        self.safe_r_point = {
                             'lat': float(r_point['lat']),
                             'lon': float(r_point['lon']),
                         }
+                        self.r_point = dict(self.safe_r_point)
                     except (KeyError, TypeError, ValueError):
                         self.r_point = None
 
         if name == 'dynamic_mission_verified':
             try:
-                self.r_point = {
+                self.dynamic_r_point = {
                     'lat': float(event['dynamic_r_lat']),
                     'lon': float(event['dynamic_r_lon']),
                 }
+                self.r_point = dict(self.dynamic_r_point)
             except (KeyError, TypeError, ValueError):
                 pass
 
@@ -974,6 +1122,10 @@ class FlightSummaryLoggerNode(Node):
                 seq=seq,
                 release_command_seq=seq,
                 gps=gps,
+                wind_speed_mps=self._wind_field('horizontal_speed_mps'),
+                wind_east_mps=self._wind_field('east_mps'),
+                wind_north_mps=self._wind_field('north_mps'),
+                wind_age_sec=self._wind_age_sec(),
                 r_point=dict(self.r_point) if self.r_point is not None else None,
                 distance_to_r_m=self._distance_from_gps_to_r(gps),
             )
@@ -1043,6 +1195,19 @@ class FlightSummaryLoggerNode(Node):
     def vfr_callback(self, msg):
         self.last_vfr = msg
 
+    def wind_callback(self, msg):
+        vector = msg.twist.twist.linear
+        east_mps = float(vector.x)
+        north_mps = float(vector.y)
+        up_mps = float(vector.z)
+        self.last_wind = {
+            'east_mps': east_mps,
+            'north_mps': north_mps,
+            'up_mps': up_mps,
+            'horizontal_speed_mps': math.hypot(east_mps, north_mps),
+            'received_monotonic': time.monotonic(),
+        }
+
     def state_callback(self, msg):
         snapshot = {
             'connected': bool(msg.connected),
@@ -1109,6 +1274,14 @@ class FlightSummaryLoggerNode(Node):
         self._payload_flags['pwm_confirmed'] = True
 
         gps = self._gps_sample()
+        self.release_snapshot = {
+            'latitude': None if gps is None else gps.get('latitude'),
+            'longitude': None if gps is None else gps.get('longitude'),
+            'wind_speed_mps': self._wind_field('horizontal_speed_mps'),
+            'wind_east_mps': self._wind_field('east_mps'),
+            'wind_north_mps': self._wind_field('north_mps'),
+            'wind_age_sec': self._wind_age_sec(),
+        }
         self.write_event(
             'payload_release_confirmed',
             release_command_seq=self._coerce_value(
@@ -1124,6 +1297,10 @@ class FlightSummaryLoggerNode(Node):
             relative_altitude_m=self.last_relative_alt_m,
             groundspeed_mps=self._vfr_field('groundspeed'),
             airspeed_mps=self._vfr_field('airspeed'),
+            wind_speed_mps=self._wind_field('horizontal_speed_mps'),
+            wind_east_mps=self._wind_field('east_mps'),
+            wind_north_mps=self._wind_field('north_mps'),
+            wind_age_sec=self._wind_age_sec(),
             r_point=dict(self.r_point) if self.r_point is not None else None,
             distance_to_r_m=self._distance_from_gps_to_r(gps),
         )
@@ -1208,6 +1385,25 @@ class FlightSummaryLoggerNode(Node):
             return float(value)
         except (TypeError, ValueError):
             return value
+
+    def _wind_field(self, name):
+        if not isinstance(self.last_wind, dict):
+            return None
+        value = self.last_wind.get(name)
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _wind_age_sec(self):
+        if not isinstance(self.last_wind, dict):
+            return None
+        received = self.last_wind.get('received_monotonic')
+        if not isinstance(received, (int, float)):
+            return None
+        return max(0.0, time.monotonic() - float(received))
 
     @staticmethod
     def distance_m(lat1, lon1, lat2, lon2):
