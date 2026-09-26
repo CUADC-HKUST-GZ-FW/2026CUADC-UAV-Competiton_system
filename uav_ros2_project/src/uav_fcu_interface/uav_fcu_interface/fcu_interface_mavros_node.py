@@ -172,8 +172,8 @@ class FcuInterfaceMavrosNode(Node):
         self.declare_parameter('dynamic_r_min_u_r_distance_m', 5.0)
         self.declare_parameter('dynamic_r_max_iterations', 4)
         self.declare_parameter('dynamic_r_convergence_m', 0.5)
-        # Reserved for later release-mechanism calibration. Keep 0.0 now.
-        self.declare_parameter('dynamic_r_release_delay_sec', 0.0)
+        # Measured payload-servo actuation delay from command to physical release.
+        self.declare_parameter('dynamic_r_release_delay_sec', 0.7)
         self.declare_parameter('dynamic_r_prediction_shadow_mode', False)
         # Software deadline for the second full-mission update, in addition to R active/
         # reached. In-flight services may finish; read-only reconciliation is

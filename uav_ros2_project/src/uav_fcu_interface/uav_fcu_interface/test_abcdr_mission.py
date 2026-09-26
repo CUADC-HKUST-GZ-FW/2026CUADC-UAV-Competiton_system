@@ -104,7 +104,7 @@ def make_node_without_ros():
     node.dynamic_r_min_u_r_distance_m = 5.0
     node.dynamic_r_max_iterations = 4
     node.dynamic_r_convergence_m = 0.5
-    node.dynamic_r_release_delay_sec = 0.0
+    node.dynamic_r_release_delay_sec = 0.7
     node.dynamic_r_prediction_shadow_mode = False
     node.dynamic_r_update_timeout_sec = 6.0
     node.aburcd_update_metrics_enabled = True
@@ -590,7 +590,7 @@ def test_dynamic_r_prediction_level_flight_matches_ballistic_solution():
     assert candidate['prediction']['predicted_vz_r_mps'] == pytest.approx(0.0)
     assert candidate['prediction']['vertical_prediction_mode'] == 'mission_altitude_level'
     assert candidate['rc_dynamic_m'] == pytest.approx(
-        20.0 * expected_fall_time, abs=0.1
+        20.0 * (expected_fall_time + node.dynamic_r_release_delay_sec), abs=0.1
     )
     assert candidate['prediction']['vz_estimation_mode'] == 'trend'
     assert node.validate_dynamic_r_candidate(candidate)[0]
@@ -612,7 +612,7 @@ def test_dynamic_r_prediction_vertical_ab_trend_does_not_bias_release_height():
     assert candidate['prediction']['vertical_prediction_mode'] == 'mission_altitude_level'
     expected_fall_time = math.sqrt(2.0 * 15.0 / 9.80665)
     assert candidate['rc_dynamic_m'] == pytest.approx(
-        20.0 * expected_fall_time, abs=0.1
+        20.0 * (expected_fall_time + node.dynamic_r_release_delay_sec), abs=0.1
     )
 
 
@@ -635,7 +635,7 @@ def test_dynamic_r_prediction_uses_configured_mission_altitude():
     assert candidate['prediction']['predicted_vz_r_mps'] == pytest.approx(0.0)
     expected_fall_time = math.sqrt(2.0 * 20.0 / 9.80665)
     assert candidate['rc_dynamic_m'] == pytest.approx(
-        20.0 * expected_fall_time, abs=0.1
+        20.0 * (expected_fall_time + node.dynamic_r_release_delay_sec), abs=0.1
     )
 
 

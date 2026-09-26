@@ -77,8 +77,8 @@ COMMON_FCU_ARGUMENT_DEFAULTS = {
     'dynamic_r_min_u_r_distance_m': '5.0',
     'dynamic_r_max_iterations': '4',
     'dynamic_r_convergence_m': '0.5',
-    # Reserved for later mechanism-delay calibration; intentionally zero now.
-    'dynamic_r_release_delay_sec': '0.0',
+    # Measured payload-servo actuation delay from command to physical release.
+    'dynamic_r_release_delay_sec': '0.7',
     'dynamic_r_prediction_shadow_mode': 'false',
     'dynamic_r_update_timeout_sec': '6.0',
     'aburcd_update_metrics_enabled': 'true',
