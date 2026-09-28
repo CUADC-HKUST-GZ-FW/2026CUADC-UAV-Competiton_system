@@ -3,7 +3,7 @@
 所有含投弹的启动方式共用 `--release-point-mode` 参数：
 
 - `fixed`：默认值。沿用原有固定偏移 R 点和 A→R→投放→D 航线，不在飞行中改写航线。
-- `dynamic`：使用 A→U→R_safe→投放→D 初始航线；飞机越过虚拟 B 点时冻结一段飞行状态，计算新 R 点，并在到达 R 前完成第二次完整航线上传、回读和核验。计算或核验失败时保留 R_safe。
+- `dynamic`：使用 A→U→R_safe→投放→D 初始航线；飞机越过虚拟 B 点时冻结一段飞行状态，计算新 R 点，并在 R 成为当前任务项之前完成第二次完整航线上传。正常成功路径检查上传 ACK、传输数量及任务进度，不做完整回读。计算失败且尚未上传时保留 R_safe；上传报错后进行一次只读回读，区分 SAFE、DYNAMIC、INCONSISTENT 和 UNKNOWN。上传后超时或取消不能断言固定 R 仍有效，将报告 UNKNOWN 并通知任务管理器进入现有 SAFE/人工处理流程。
 - `shadow`：执行相同计算并记录结果，但不上传新 R 点，用于实飞观察算法输出。
 
 比赛多标靶全链路：
@@ -43,3 +43,5 @@ SITL 使用同一个参数：
 ```bash
 ros2 launch uav_bringup sitl_mavros_dynamic_abc.launch.py release_point_mode:=dynamic
 ```
+
+注意：任务管理器的 SAFE 状态只阻止后续伴随计算机控制，不撤销飞控已接收的航线。`shadow` 无论是否启用 `dynamic_r_test_mode` 都禁止第二次上传；初始任务仍包含 U 点。

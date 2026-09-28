@@ -2497,10 +2497,7 @@ class FcuInterfaceMavrosNode(Node):
             ),
             **self._gps_snapshot_fields(),
         )
-        if (
-            candidate.get('reason') == 'ab_multisample_prediction'
-            and self.dynamic_r_prediction_shadow_mode
-        ):
+        if self.dynamic_r_prediction_shadow_mode:
             self._dynamic_prediction_shadow = copy.deepcopy(prediction)
             if self._set_dynamic_update_result('R_SAFE_FALLBACK'):
                 self._publish_aburcd_event(
@@ -2652,6 +2649,9 @@ class FcuInterfaceMavrosNode(Node):
         transaction again uses WaypointPush(start_index=0); no partial mission
         protocol or raw MAVLink writer is used.
         """
+        # Shadow is a write prohibition, regardless of the predictor used.
+        if self.dynamic_r_prediction_shadow_mode:
+            return
         started = float(snapshot['timestamp_monotonic'])
         self._require_dynamic_operation_allowed(started, 'before_second_full_push')
         if self._second_full_push_attempted:
@@ -3052,6 +3052,14 @@ class FcuInterfaceMavrosNode(Node):
             )
             state = self._dynamic_update_state
             cancel_reason = self._dynamic_worker_cancel_reason or reason
+            upload_attempted = self._second_full_push_attempted
+        # Once a replacement was dispatched, cancellation cannot restore the
+        # old FCU mission. Do not report SAFE without read-back evidence.
+        if upload_attempted:
+            self._dynamic_manual_failure(
+                'UNKNOWN',
+                f'dynamic update aborted after upload dispatch: {reason}',
+            )
         event = (
             'dynamic_update_too_late'
             if state == 'TOO_LATE' or deadline_reason in {
@@ -3062,7 +3070,7 @@ class FcuInterfaceMavrosNode(Node):
         self._publish_aburcd_event(
             event,
             failure_reason=reason,
-            r_source='SAFE',
+            r_source='UNKNOWN' if upload_attempted else 'SAFE',
             dynamic_worker_cancel_reason=cancel_reason,
             dynamic_update_total_ms=(time.monotonic() - started) * 1000.0,
             deadline_current_seq=current_seq,

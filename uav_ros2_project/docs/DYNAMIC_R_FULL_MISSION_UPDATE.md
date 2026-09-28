@@ -1,5 +1,7 @@
 # Dynamic R：两次完整 mission 上传交付记录
 
+> 本文下方为早期分支交付记录，正常成功路径的 Pull/Verify 描述已过时。当前实现见 RELEASE_POINT_MODE.md：正常成功只确认 ACK、完整传输数量和任务进度；上传报错才做只读回读。上传后取消报告 UNKNOWN，不保证恢复 R_safe。
+
 基线：`origin/cjy_0915_修改航线设计`，`75b7caf5b422020c313aa6c1ba738b55ef0b0ed4`（只修改了一半）。
 
 已执行 `git fetch origin`，在本地同名跟踪分支建立独立 worktree：

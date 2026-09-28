@@ -173,3 +173,50 @@ def test_failed_attempt_is_latched_and_not_retried():
     assert first_count == 1
     assert len([call for call in calls if call[0] == 'push']) == first_count
     assert node._second_full_push_attempted
+
+
+@pytest.mark.parametrize('reason', ('dynamic_update_timeout', 'r_reached', 'task_cleared'))
+def test_abort_after_successful_push_never_claims_safe_and_reports_failure(reason):
+    node, _points, _mission, events, calls = _scenario(cancel_reason=reason)
+    _run(node)
+    assert [call[0] for call in calls] == ['push']
+    assert not node._dynamic_update_verified
+    assert node._dynamic_update_result in {'UPDATE_FAILED', 'UPDATE_TOO_LATE'}
+    assert not any(fields.get('r_source') == 'SAFE' for _, fields in events)
+    failures = [fields for name, fields in events if name == 'dynamic_mission_failed']
+    assert failures and failures[-1]['mission_state'] == 'UNKNOWN'
+    assert failures[-1]['requires_manual_intervention'] is True
+
+
+def test_abort_before_upload_retains_safe_without_reporting_unknown():
+    node, _points, _mission, events, calls = _scenario()
+    node._cancel_dynamic_update('task_cleared')
+    _run(node)
+    assert calls == []
+    assert any(fields.get('r_source') == 'SAFE' for _, fields in events)
+    assert not any(name == 'dynamic_mission_failed' for name, _ in events)
+
+
+@pytest.mark.parametrize('test_mode', (True, False))
+def test_shadow_blocks_both_test_and_prediction_candidates(test_mode):
+    node, points, _mission, events, calls = _scenario()
+    candidate = node.compute_dynamic_r({'ground_speed_mps': 20.0}, points['C'])
+    candidate['reason'] = 'TEST_ONLY_fixed_offset' if test_mode else 'ab_multisample_prediction'
+    node.dynamic_r_test_mode = test_mode
+    node.dynamic_r_prediction_shadow_mode = True
+    node.compute_dynamic_r = lambda *_: candidate
+    _run(node)
+    assert calls == []
+    assert not node._dynamic_update_verified
+    assert not node._second_full_push_attempted
+    assert any(name == 'r_calc_shadow' for name, _ in events)
+
+
+def test_shadow_also_blocks_direct_upload_entry():
+    import asyncio
+    node, points, _mission, _events, calls = _scenario()
+    candidate = node.compute_dynamic_r({'ground_speed_mps': 20.0}, points['C'])
+    node.dynamic_r_prediction_shadow_mode = True
+    asyncio.run(node._update_dynamic_r_async(candidate, {'timestamp_monotonic': time.monotonic()}, 0.0))
+    assert calls == []
+    assert not node._second_full_push_attempted
