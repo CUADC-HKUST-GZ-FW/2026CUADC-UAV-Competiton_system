@@ -19,6 +19,20 @@ readonly WS_SETUP="${WS_ROOT}/install/setup.bash"
 readonly RECOGNITION_CONFIG="${WS_ROOT}/config/recognition_mode.conf"
 readonly RECON_START_SCRIPT="/home/nx163/youth-vision-runtime/scripts/start_recon_pipeline.sh"
 
+if [[ "$#" -eq 0 ]]; then
+    RELEASE_POINT_MODE="fixed"
+elif [[ "$#" -eq 2 && "${1:-}" == "--release-point-mode" ]]; then
+    RELEASE_POINT_MODE="${2:-}"
+else
+    echo "Usage: $0 [--release-point-mode fixed|dynamic|shadow]" >&2
+    exit 2
+fi
+readonly RELEASE_POINT_MODE
+case "${RELEASE_POINT_MODE}" in
+    fixed|dynamic|shadow) ;;
+    *) echo "[STARTUP][ERROR] release point mode must be fixed, dynamic, or shadow" >&2; exit 2 ;;
+esac
+
 if [[ ! -r "${ROS_SETUP}" ]]; then
     echo "[STARTUP][ERROR] ROS setup not found: ${ROS_SETUP}" >&2
     exit 1
@@ -111,8 +125,8 @@ case "${RECOGNITION_MODE}" in
         ;;
 esac
 
-echo "[STARTUP] workspace=${WS_ROOT} ros_domain_id=${ROS_DOMAIN_ID}"
+echo "[STARTUP] workspace=${WS_ROOT} ros_domain_id=${ROS_DOMAIN_ID} release_point_mode=${RELEASE_POINT_MODE}"
 echo "[STARTUP] launching uav_bringup real_bringup.launch.py"
 
 # Replace the shell process so systemd signals reach ros2 launch directly.
-exec ros2 launch uav_bringup real_bringup.launch.py
+exec ros2 launch uav_bringup real_bringup.launch.py release_point_mode:="${RELEASE_POINT_MODE}"

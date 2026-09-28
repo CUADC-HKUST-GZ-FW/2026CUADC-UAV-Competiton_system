@@ -187,12 +187,28 @@ def generate_launch_description():
     # ========================================================================
     # MAVROS
     # ========================================================================
+    # Use MAVROS node.launch directly so SITL can keep the standard ArduPilot
+    # configuration while overriding only the plugin denylist.  The local
+    # plugin list mirrors MAVROS apm_pluginlists.yaml and additionally disables
+    # the unused `param` plugin to prevent full FCU parameter synchronization
+    # from competing with mission pull/push traffic.  REAL bringup is unchanged.
+    mavros_pluginlists = PathJoinSubstitution([
+        FindPackageShare('uav_bringup'),
+        'config',
+        'sitl_mavros_pluginlists.yaml',
+    ])
+    mavros_config = PathJoinSubstitution([
+        FindPackageShare('mavros'),
+        'launch',
+        'apm_config.yaml',
+    ])
+
     mavros = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(
             PathJoinSubstitution([
                 FindPackageShare('mavros'),
                 'launch',
-                'apm.launch',
+                'node.launch',
             ])
         ),
         launch_arguments={
@@ -200,6 +216,8 @@ def generate_launch_description():
             'gcs_url': gcs_url,
             'tgt_system': target_system_id,
             'tgt_component': target_component_id,
+            'pluginlists_yaml': mavros_pluginlists,
+            'config_yaml': mavros_config,
         }.items(),
     )
 
@@ -243,7 +261,14 @@ def generate_launch_description():
         executable='flight_summary_logger_node',
         name='flight_summary_logger_node',
         output='both',
-        parameters=[{'use_sim_time': use_sim_time}],
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'aburcd_update_metrics_enabled': common[
+                'aburcd_update_metrics_enabled'
+            ],
+            'release_point_mode': common['release_point_mode'],
+            'dynamic_r_enabled': common['dynamic_r_enabled'],
+        }],
     )
 
     arguments = (

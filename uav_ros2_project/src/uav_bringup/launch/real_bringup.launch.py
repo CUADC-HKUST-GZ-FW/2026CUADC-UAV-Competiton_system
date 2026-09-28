@@ -285,7 +285,14 @@ def generate_launch_description():
         name='flight_summary_logger_node',
         output='both',
         on_exit=[LogInfo(msg='[REAL FLIGHT PROFILE] FlightSummaryLogger exited')],
-        parameters=[{'use_sim_time': use_sim_time}],
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'aburcd_update_metrics_enabled': common[
+                'aburcd_update_metrics_enabled'
+            ],
+            'release_point_mode': common['release_point_mode'],
+            'dynamic_r_enabled': common['dynamic_r_enabled'],
+        }],
     )
 
     # Shared arguments are declared from one common file; REAL-only arguments
