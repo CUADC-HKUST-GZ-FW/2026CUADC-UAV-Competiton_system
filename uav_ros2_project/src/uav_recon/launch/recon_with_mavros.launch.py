@@ -10,6 +10,7 @@ import os
 def generate_launch_description():
     fcu_url = LaunchConfiguration('fcu_url')
     output_root = LaunchConfiguration('output_root')
+    recognition_event_log_path = LaunchConfiguration('recognition_event_log_path')
     mavros_launch = os.path.join(get_package_share_directory('mavros'), 'launch', 'apm.launch')
     recon_config = os.path.join(get_package_share_directory('uav_recon'), 'config', 'recon.yaml')
     return LaunchDescription([
@@ -19,8 +20,11 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'output_root',
-            default_value='/home/nx163/youth-vision-runtime/recon_results/current',
+            default_value=os.path.expanduser(
+                '~/youth-vision-runtime/recon_results/current'
+            ),
         ),
+        DeclareLaunchArgument('recognition_event_log_path', default_value=''),
         IncludeLaunchDescription(
             AnyLaunchDescriptionSource(mavros_launch),
             launch_arguments={
@@ -35,6 +39,9 @@ def generate_launch_description():
             executable='recon_geolocator_node',
             name='recon_geolocator',
             output='screen',
-            parameters=[recon_config, {'output_root': output_root}],
+            parameters=[recon_config, {
+                'output_root': output_root,
+                'recognition_event_log_path': recognition_event_log_path,
+            }],
         ),
     ])

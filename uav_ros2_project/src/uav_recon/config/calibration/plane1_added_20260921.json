@@ -1,0 +1,684 @@
+{
+  "model": "OpenCV pinhole camera model with radial-tangential distortion",
+  "source": "added_plane1",
+  "image_size_pixels": {
+    "width": 1440,
+    "height": 1080
+  },
+  "checkerboard": {
+    "squares": {
+      "columns": 10,
+      "rows": 7
+    },
+    "inner_corners": {
+      "columns": 9,
+      "rows": 6
+    },
+    "square_size_mm": {
+      "horizontal": 101.0,
+      "vertical": 101.0
+    }
+  },
+  "preprocessing": {
+    "candidate_methods": [
+      "raw",
+      "clahe",
+      "sharp",
+      "clahe_sharp"
+    ],
+    "selection": "first successful method in the listed order",
+    "clahe_clip_limit": 2.0,
+    "clahe_tile_grid": [
+      8,
+      8
+    ],
+    "method_counts": {
+      "raw": 15,
+      "clahe": 18,
+      "sharp": 0,
+      "clahe_sharp": 0
+    }
+  },
+  "camera_matrix": [
+    [
+      1806.3213063145067,
+      0.0,
+      761.7737453413206
+    ],
+    [
+      0.0,
+      1801.5023843505849,
+      548.9659265501099
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "field_of_view_degrees": {
+    "horizontal": 43.46447000179375,
+    "vertical": 33.372184365175094
+  },
+  "distortion_coefficients": {
+    "k1": -0.10188026760104918,
+    "k2": 0.23320449489932332,
+    "p1": -0.0019490104568922507,
+    "p2": 0.0006084823669125458,
+    "k3": -0.09865676529537314
+  },
+  "quality": {
+    "rms_reprojection_error_pixels": 0.6104663810640779,
+    "mean_view_reprojection_error_pixels": 0.45385535219402023,
+    "max_view_reprojection_error_pixels": 1.1584908962249756
+  },
+  "image_counts": {
+    "total": 59,
+    "corner_detections_before_outlier_filter": 33,
+    "used": 33,
+    "rejected": 26
+  },
+  "used_images": [
+    {
+      "file": "Image_20260920174759746.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.2949579656124115,
+      "rotation_vector": [
+        -0.01645215197255506,
+        0.18549105867853558,
+        -3.1223759602326817
+      ],
+      "translation_vector_mm": [
+        397.77967808422505,
+        209.35268962934023,
+        1622.0442748908665
+      ]
+    },
+    {
+      "file": "Image_20260920174804224.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.2895439565181732,
+      "rotation_vector": [
+        -0.007966001222560597,
+        0.15721416298343915,
+        -3.1180031335730467
+      ],
+      "translation_vector_mm": [
+        386.2812157474896,
+        242.44351776693063,
+        1619.0445616933175
+      ]
+    },
+    {
+      "file": "Image_20260920174841327.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.3411037027835846,
+      "rotation_vector": [
+        0.023891841786398364,
+        0.1406889917104089,
+        -3.123573528985586
+      ],
+      "translation_vector_mm": [
+        486.8881734151,
+        121.31519551769985,
+        1617.0142656903815
+      ]
+    },
+    {
+      "file": "Image_20260920174845500.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.3349192142486572,
+      "rotation_vector": [
+        0.010054144713464816,
+        0.1417730888723595,
+        -3.1125975147701994
+      ],
+      "translation_vector_mm": [
+        478.8272653119595,
+        150.82888278863655,
+        1605.9844455890182
+      ]
+    },
+    {
+      "file": "Image_20260920174853096.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.39897143840789795,
+      "rotation_vector": [
+        -0.1213931352458609,
+        0.1753043399135185,
+        -3.11081717538271
+      ],
+      "translation_vector_mm": [
+        218.2803702438116,
+        139.60382729443882,
+        1588.0993612878135
+      ]
+    },
+    {
+      "file": "Image_20260920174857614.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.4786025285720825,
+      "rotation_vector": [
+        -0.11141230266587415,
+        0.2135817819409836,
+        -3.0967632018878377
+      ],
+      "translation_vector_mm": [
+        220.20276908326758,
+        144.77479075105336,
+        1600.6847521606655
+      ]
+    },
+    {
+      "file": "Image_20260920175008228.bmp",
+      "detection_method": "clahe",
+      "mean_reprojection_error_pixels": 0.4474492371082306,
+      "rotation_vector": [
+        0.5031653727005944,
+        0.15779689853664086,
+        -3.0868521619370086
+      ],
+      "translation_vector_mm": [
+        521.1693617694455,
+        191.12121909945063,
+        1713.5951798404906
+      ]
+    },
+    {
+      "file": "Image_20260920175014909.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.41641494631767273,
+      "rotation_vector": [
+        0.4995684186371293,
+        0.15230363546427123,
+        -3.0655270801104986
+      ],
+      "translation_vector_mm": [
+        277.4999521281363,
+        243.8050789718725,
+        1677.9366445632613
+      ]
+    },
+    {
+      "file": "Image_20260920175018681.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.4052077829837799,
+      "rotation_vector": [
+        0.49797392854095524,
+        0.15375631988465985,
+        -3.072764257240164
+      ],
+      "translation_vector_mm": [
+        277.24287268304107,
+        235.6888726214739,
+        1684.8248431440632
+      ]
+    },
+    {
+      "file": "Image_20260920175043403.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 1.1584908962249756,
+      "rotation_vector": [
+        -0.8770547033242272,
+        0.15145411133006534,
+        -2.9642076987791413
+      ],
+      "translation_vector_mm": [
+        354.7908302295446,
+        299.96186511383945,
+        1349.820947726639
+      ]
+    },
+    {
+      "file": "Image_20260920175055610.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.49204668402671814,
+      "rotation_vector": [
+        -0.8034180023456068,
+        0.22111625202435273,
+        -2.9310676934989677
+      ],
+      "translation_vector_mm": [
+        366.1528616529707,
+        212.0672671446395,
+        1398.9461999046064
+      ]
+    },
+    {
+      "file": "Image_20260920175105436.bmp",
+      "detection_method": "clahe",
+      "mean_reprojection_error_pixels": 0.5592238903045654,
+      "rotation_vector": [
+        -0.7748744353602257,
+        0.22471198109167806,
+        -2.934242529408917
+      ],
+      "translation_vector_mm": [
+        6.1510177087096665,
+        200.73782194790584,
+        1462.7878519068474
+      ]
+    },
+    {
+      "file": "Image_20260920175155299.bmp",
+      "detection_method": "clahe",
+      "mean_reprojection_error_pixels": 0.3808612525463104,
+      "rotation_vector": [
+        -0.043531764008474944,
+        -0.3438078676134839,
+        -3.122427750178918
+      ],
+      "translation_vector_mm": [
+        428.5773807909716,
+        316.2700902950235,
+        1478.7192423937615
+      ]
+    },
+    {
+      "file": "Image_20260920175208847.bmp",
+      "detection_method": "clahe",
+      "mean_reprojection_error_pixels": 0.3961707651615143,
+      "rotation_vector": [
+        0.02782727869287083,
+        -0.36019749124302713,
+        -3.1193665968627116
+      ],
+      "translation_vector_mm": [
+        308.9888984876461,
+        328.11964732377214,
+        1487.8567870872068
+      ]
+    },
+    {
+      "file": "Image_20260920175230716.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.7489786744117737,
+      "rotation_vector": [
+        -0.06632981799775327,
+        -0.5248147434152002,
+        -3.0662779490948378
+      ],
+      "translation_vector_mm": [
+        479.41974910906765,
+        49.13796764066635,
+        1597.0715874323967
+      ]
+    },
+    {
+      "file": "Image_20260920175234859.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.7766659259796143,
+      "rotation_vector": [
+        -0.0520394684967115,
+        -0.5054005615416802,
+        -3.0821076079813423
+      ],
+      "translation_vector_mm": [
+        458.97804736546226,
+        28.63038164980705,
+        1602.8013424529527
+      ]
+    },
+    {
+      "file": "Image_20260920175242840.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.8063342571258545,
+      "rotation_vector": [
+        0.008670545304485794,
+        -0.5212899317684135,
+        -3.0671558690347887
+      ],
+      "translation_vector_mm": [
+        250.66405189062897,
+        45.30517233672616,
+        1607.1731141441385
+      ]
+    },
+    {
+      "file": "Image_20260920175246639.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.8221483826637268,
+      "rotation_vector": [
+        0.0006538631192257916,
+        -0.5228408274304803,
+        -3.062629674321363
+      ],
+      "translation_vector_mm": [
+        265.7749192024084,
+        41.1696915800059,
+        1607.1918415073544
+      ]
+    },
+    {
+      "file": "Image_20260920175313681.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.5097313523292542,
+      "rotation_vector": [
+        -0.04318389111554455,
+        0.4650415772785667,
+        -3.097481491812186
+      ],
+      "translation_vector_mm": [
+        426.6876908219536,
+        151.26055896646054,
+        1664.957444917574
+      ]
+    },
+    {
+      "file": "Image_20260920175317726.bmp",
+      "detection_method": "clahe",
+      "mean_reprojection_error_pixels": 0.6234973073005676,
+      "rotation_vector": [
+        0.023790004099017995,
+        -0.3772132502460242,
+        3.1036923798238356
+      ],
+      "translation_vector_mm": [
+        417.37448699667357,
+        170.41315654568953,
+        1677.5257876251578
+      ]
+    },
+    {
+      "file": "Image_20260920175348427.bmp",
+      "detection_method": "clahe",
+      "mean_reprojection_error_pixels": 0.7800408601760864,
+      "rotation_vector": [
+        0.036580037884626423,
+        0.5244162374218101,
+        -3.085850506422905
+      ],
+      "translation_vector_mm": [
+        325.11640708097605,
+        165.61181737946882,
+        1646.8469145016486
+      ]
+    },
+    {
+      "file": "Image_20260920175352471.bmp",
+      "detection_method": "clahe",
+      "mean_reprojection_error_pixels": 1.0802793502807617,
+      "rotation_vector": [
+        0.05811223573689134,
+        0.5546826562487649,
+        -3.076438625780739
+      ],
+      "translation_vector_mm": [
+        298.4116338285817,
+        162.42118313751578,
+        1652.331897450527
+      ]
+    },
+    {
+      "file": "Image_20260920175523379.bmp",
+      "detection_method": "clahe",
+      "mean_reprojection_error_pixels": 0.507843017578125,
+      "rotation_vector": [
+        0.0730486217614306,
+        0.09355441036051347,
+        -3.132223920390764
+      ],
+      "translation_vector_mm": [
+        383.98145462597046,
+        246.19994400205653,
+        1303.2673724016986
+      ]
+    },
+    {
+      "file": "Image_20260920175527527.bmp",
+      "detection_method": "clahe",
+      "mean_reprojection_error_pixels": 0.4989185631275177,
+      "rotation_vector": [
+        0.07814873858948264,
+        0.08180878710220608,
+        -3.1352123781651624
+      ],
+      "translation_vector_mm": [
+        383.6763061769592,
+        244.07448389283036,
+        1306.6333269541683
+      ]
+    },
+    {
+      "file": "Image_20260920175604286.bmp",
+      "detection_method": "clahe",
+      "mean_reprojection_error_pixels": 0.20513269305229187,
+      "rotation_vector": [
+        -0.3971535223291179,
+        -0.331762023050921,
+        3.0993427486187226
+      ],
+      "translation_vector_mm": [
+        -958.6330323986546,
+        -770.8845473251424,
+        4737.808599200666
+      ]
+    },
+    {
+      "file": "Image_20260920175608094.bmp",
+      "detection_method": "clahe",
+      "mean_reprojection_error_pixels": 0.19570297002792358,
+      "rotation_vector": [
+        0.40462300300934506,
+        0.3451382961625566,
+        -3.090135646833683
+      ],
+      "translation_vector_mm": [
+        -969.3316452060562,
+        -792.0709539479767,
+        4733.8342084240585
+      ]
+    },
+    {
+      "file": "Image_20260920175623476.bmp",
+      "detection_method": "clahe",
+      "mean_reprojection_error_pixels": 0.15130282938480377,
+      "rotation_vector": [
+        -0.3632464086250891,
+        0.31900669280910887,
+        -3.058392492717383
+      ],
+      "translation_vector_mm": [
+        1567.7291707604588,
+        -779.0396118018579,
+        4703.820763414826
+      ]
+    },
+    {
+      "file": "Image_20260920175627779.bmp",
+      "detection_method": "clahe",
+      "mean_reprojection_error_pixels": 0.14583660662174225,
+      "rotation_vector": [
+        -0.34672656945340663,
+        0.31028052307931375,
+        -3.0540929536844423
+      ],
+      "translation_vector_mm": [
+        1520.447831821749,
+        -752.6921759431639,
+        4722.720985998925
+      ]
+    },
+    {
+      "file": "Image_20260920175806093.bmp",
+      "detection_method": "clahe",
+      "mean_reprojection_error_pixels": 0.1098402589559555,
+      "rotation_vector": [
+        0.0914399533998796,
+        0.44043019600868194,
+        -3.0955387865006094
+      ],
+      "translation_vector_mm": [
+        -229.3050104790469,
+        -783.8036536816786,
+        4720.55129230116
+      ]
+    },
+    {
+      "file": "Image_20260920175812991.bmp",
+      "detection_method": "clahe",
+      "mean_reprojection_error_pixels": 0.1139494851231575,
+      "rotation_vector": [
+        -0.1524249565436682,
+        0.43386332362564445,
+        -3.0907444130279274
+      ],
+      "translation_vector_mm": [
+        585.3222195265485,
+        -790.6613916311052,
+        4722.609321864827
+      ]
+    },
+    {
+      "file": "Image_20260920175819671.bmp",
+      "detection_method": "clahe",
+      "mean_reprojection_error_pixels": 0.14987243711948395,
+      "rotation_vector": [
+        -0.3220540214003371,
+        0.432079256863183,
+        -3.0755731291980624
+      ],
+      "translation_vector_mm": [
+        1186.116794092283,
+        -766.464651009244,
+        4643.4156035314845
+      ]
+    },
+    {
+      "file": "Image_20260920175836727.bmp",
+      "detection_method": "clahe",
+      "mean_reprojection_error_pixels": 0.15018273890018463,
+      "rotation_vector": [
+        0.476712267673553,
+        -0.2564796293684591,
+        3.075247303238635
+      ],
+      "translation_vector_mm": [
+        1577.2140323608228,
+        -208.39810320954464,
+        4546.458631585541
+      ]
+    },
+    {
+      "file": "Image_20260920175912151.bmp",
+      "detection_method": "clahe",
+      "mean_reprojection_error_pixels": 0.20700465142726898,
+      "rotation_vector": [
+        0.04881268809980883,
+        -0.3071359193884271,
+        -3.120260207943686
+      ],
+      "translation_vector_mm": [
+        -192.34092825310793,
+        1234.1581283430896,
+        4580.147724158574
+      ]
+    }
+  ],
+  "rejected_images": [
+    {
+      "file": "Image_20260920174905214.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920174916098.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920174953507.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920174957527.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175022646.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175025993.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175109558.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175113817.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175132559.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175325806.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175329867.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175336165.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175341265.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175424781.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175645199.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175650150.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175714408.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175717685.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175738110.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175751897.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175758264.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175843137.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175848773.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175900684.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175908023.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260920175917552.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    }
+  ]
+}

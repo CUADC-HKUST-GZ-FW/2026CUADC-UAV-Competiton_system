@@ -137,6 +137,8 @@ def make_fcu_ready(fcu):
         )
     if fcu.insert_wp_index != 5 or fcu.resume_wp_index != 10:
         raise RuntimeError('mission splice parameters are stale')
+    if abs(fcu.release_offset_m - 46.0) > 1.0e-9:
+        raise RuntimeError('release offset is stale')
     if abs(fcu.d_offset_m - 50.0) > 1.0e-9:
         raise RuntimeError('D-point offset is stale')
 
@@ -224,6 +226,7 @@ def main():
             '--ros-args',
             '-p', 'insert_wp_index:=5',
             '-p', 'resume_wp_index:=10',
+            '-p', 'release_offset_m:=46.0',
             '-p', 'd_offset_m:=50.0',
         ])
         executor = MultiThreadedExecutor(num_threads=4)

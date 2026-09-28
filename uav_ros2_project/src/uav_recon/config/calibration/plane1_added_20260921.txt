@@ -1,0 +1,24 @@
+Camera calibration result: Plane 1 added dataset
+Image size: 1440 x 1080 pixels
+Checkerboard: 10 x 7 squares, 9 x 6 inner corners
+Square size: 101.0 x 101.0 mm
+
+Camera matrix K (pixels):
+1806.32130631 0 761.77374534
+0 1801.50238435 548.96592655
+0 0 1
+
+Horizontal field of view: 43.464470 degrees
+Vertical field of view: 33.372184 degrees
+
+OpenCV distortion coefficients:
+k1=-0.1018802676
+k2=0.2332044949
+p1=-0.001949010457
+p2=0.0006084823669
+k3=-0.0986567653
+
+Calibration RMS reprojection error: 0.610466 pixels
+Mean per-view reprojection error: 0.453855 pixels
+Detected/used images: 33 / 33 / 59
+Detection methods: {'raw': 15, 'clahe': 18, 'sharp': 0, 'clahe_sharp': 0}

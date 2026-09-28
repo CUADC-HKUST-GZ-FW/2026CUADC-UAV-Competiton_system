@@ -16,7 +16,7 @@ def make_node_without_ros():
     node = FcuInterfaceMavrosNode.__new__(FcuInterfaceMavrosNode)
     node.a_offset_m = 160.0
     node.b_offset_m = 95.0
-    node.release_offset_m = 56.0
+    node.release_offset_m = 46.0
     node.d_offset_m = 160.0
     node.a_acceptance_radius_m = 30.0
     node.b_acceptance_radius_m = 15.0
@@ -79,7 +79,7 @@ def test_abcdr_distances_and_order(heading_deg):
     expected_distances = {
         'A': 160.0,
         'B': 95.0,
-        'R': 56.0,
+        'R': 46.0,
         'D': 160.0,
     }
     for name, expected_distance_m in expected_distances.items():
@@ -101,7 +101,7 @@ def test_abcdr_distances_and_order(heading_deg):
         points['B']['lon'],
         points['R']['lat'],
         points['R']['lon'],
-    ) == pytest.approx(39.0, abs=0.05)
+    ) == pytest.approx(49.0, abs=0.05)
     assert math.isfinite(points['D']['lat']) and math.isfinite(points['D']['lon'])
 
 

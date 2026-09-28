@@ -22,6 +22,59 @@ def is_empty_target_label(label: object) -> bool:
     )
 
 
+def recognition_event_to_manifest(record: dict):
+    """Convert one lossless recognition-log event into the manifest schema."""
+    if record.get('record_type') != 'recognition' or not record.get('det_found', False):
+        return None
+
+    detections = []
+    for detection in record.get('detections', []):
+        center = detection.get('center')
+        label = str(detection.get('class_label', ''))
+        if (
+            not center
+            or len(center) != 2
+            or not label
+            or int(detection.get('class_id', -1)) < 0
+        ):
+            continue
+        detections.append(detection)
+
+    detections.sort(
+        key=lambda item: (
+            int((item.get('roi') or [0, 0])[1]),
+            int((item.get('roi') or [0, 0])[0]),
+        )
+    )
+    crops = []
+    for rank, detection in enumerate(detections):
+        crops.append({
+            'rank': rank,
+            'detection_index': int(detection.get('detection_index', rank)),
+            'src': f'crop_{rank:02d}.jpg',
+            'roi': list(detection.get('roi', [])),
+            'center': list(detection['center']),
+            'center_source': detection.get('center_source', 'keypoint_centroid'),
+            'keypoints': list(detection.get('keypoints', [])),
+            'class_id': int(detection.get('class_id', -1)),
+            'class_label': str(detection.get('class_label', '')),
+            'class_prob': float(detection.get('class_prob', 0.0)),
+            'pose_score': float(detection.get('score', 0.0)),
+        })
+    return {
+        'frame': int(record.get('frame', -1)),
+        'capture_timestamp_unix_ns': int(record.get('capture_timestamp_unix_ns', 0)),
+        'capture_monotonic_ns': int(record.get('capture_monotonic_ns', 0)),
+        'capture_clock_source': str(record.get('capture_clock_source', '')),
+        'source_sequence': int(record.get('source_sequence', 0)),
+        'frame_width': int(record.get('frame_width', 0)),
+        'frame_height': int(record.get('frame_height', 0)),
+        'mode': str(record.get('mode', '')),
+        'count': len(crops),
+        'crops': crops,
+    }
+
+
 def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
@@ -344,6 +397,9 @@ class Observation:
     frame_number: int = -1
     source_sequence: int = 0
     center_px: Sequence[float] = field(default_factory=lambda: (0.0, 0.0))
+    geolocation_resolved: bool = True
+    geolocation_valid: bool = True
+    geolocation_error: str = ''
 
 
 def image_center_weight(
@@ -510,17 +566,99 @@ class FramePacket:
         self.last_center_px = tuple(float(value) for value in observation.center_px[:2])
         self.last_frame_number = observation.frame_number
 
+    def geolocated_observations(self) -> List[Observation]:
+        return [
+            observation
+            for observation in self.observations
+            if observation.geolocation_resolved
+            and observation.geolocation_valid
+            and math.isfinite(observation.latitude)
+            and math.isfinite(observation.longitude)
+            and math.isfinite(observation.altitude_msl_m)
+        ]
+
     def fuse(
         self,
         single_observation_sigma_m: float,
         center_weight_minimum: float = 0.25,
         center_weight_power: float = 1.0,
     ):
-        fused = Track(self.packet_id, list(self.observations)).fuse(
+        geolocated = self.geolocated_observations()
+        if not geolocated:
+            raise ValueError('frame packet has no geolocated observations')
+        fused = Track(self.packet_id, geolocated).fuse(
             single_observation_sigma_m,
             center_weight_minimum,
             center_weight_power,
         )
+
+        label_counts = {}
+        label_scores = {}
+        best_by_label = {}
+        for observation in self.observations:
+            label_counts[observation.label] = label_counts.get(observation.label, 0) + 1
+            label_scores[observation.label] = label_scores.get(observation.label, 0.0) + max(
+                0.01,
+                observation.confidence * observation.pose_score,
+            )
+            score = (
+                observation.confidence
+                * observation.pose_score
+                * image_center_weight(
+                    observation.center_distance_norm,
+                    center_weight_minimum,
+                    center_weight_power,
+                )
+            )
+            current = best_by_label.get(observation.label)
+            if current is None:
+                best_by_label[observation.label] = observation
+                continue
+            current_score = (
+                current.confidence
+                * current.pose_score
+                * image_center_weight(
+                    current.center_distance_norm,
+                    center_weight_minimum,
+                    center_weight_power,
+                )
+            )
+            if score > current_score:
+                best_by_label[observation.label] = observation
+
+        label = max(
+            label_counts,
+            key=lambda item: (label_counts[item], label_scores[item], item),
+        )
+        best = best_by_label[label]
+        coordinate_best = fused['best']
+        fused.update({
+            'label': label,
+            'class_id': best.class_id,
+            'confidence': max(
+                observation.confidence
+                for observation in self.observations
+                if observation.label == label
+            ),
+            'label_consensus': label_counts[label] / len(self.observations),
+            'label_counts': label_counts,
+            'label_scores': label_scores,
+            'best_by_label': best_by_label,
+            'best': best,
+            'coordinate_best': coordinate_best,
+            'raw_observation_count': len(self.observations),
+            'tracking_observation_count': len(self.observations),
+            'geolocated_observation_count': len(geolocated),
+            'telemetry_rejected_observation_count': sum(
+                1
+                for observation in self.observations
+                if observation.geolocation_resolved and not observation.geolocation_valid
+            ),
+            'tracking_observation_span_sec': (
+                max(observation.timestamp for observation in self.observations)
+                - min(observation.timestamp for observation in self.observations)
+            ),
+        })
         fused['packet_ids'] = [self.packet_id]
         fused['packet_count'] = 1
         return fused
@@ -539,9 +677,9 @@ class PixelFramePacketManager:
     def __init__(
         self,
         gap_timeout_sec: float = 0.20,
-        pixel_gate_base_px: float = 50.0,
-        pixel_gate_rate_px_per_sec: float = 1300.0,
-        pixel_gate_max_px: float = 200.0,
+        pixel_gate_base_px: float = 70.0,
+        pixel_gate_rate_px_per_sec: float = 1500.0,
+        pixel_gate_max_px: float = 220.0,
         max_observations: int = 300,
         association_gap_sec: Optional[float] = None,
     ):
@@ -867,6 +1005,18 @@ def _merge_packet_candidates(left, right):
         'rejected_observation_count': (
             int(left.get('rejected_observation_count', 0))
             + int(right.get('rejected_observation_count', 0))
+        ),
+        'tracking_observation_count': (
+            int(left.get('tracking_observation_count', left.get('raw_observation_count', left_count)))
+            + int(right.get('tracking_observation_count', right.get('raw_observation_count', right_count)))
+        ),
+        'geolocated_observation_count': (
+            int(left.get('geolocated_observation_count', left_count))
+            + int(right.get('geolocated_observation_count', right_count))
+        ),
+        'telemetry_rejected_observation_count': (
+            int(left.get('telemetry_rejected_observation_count', 0))
+            + int(right.get('telemetry_rejected_observation_count', 0))
         ),
         'observation_start_timestamp': min(
             float(left['observation_start_timestamp']),

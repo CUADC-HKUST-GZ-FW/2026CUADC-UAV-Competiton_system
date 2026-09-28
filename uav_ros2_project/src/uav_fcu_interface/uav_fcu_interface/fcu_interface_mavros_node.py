@@ -88,7 +88,7 @@ class FcuInterfaceMavrosNode(Node):
         # Temporary AUTO mission geometry.
         self.declare_parameter('a_offset_m', 160.0)
         self.declare_parameter('b_offset_m', 95.0)
-        self.declare_parameter('release_offset_m', 56.0)
+        self.declare_parameter('release_offset_m', 46.0)
         self.declare_parameter('d_offset_m', 160.0)
 
         # Observation-only A-B trajectory check.

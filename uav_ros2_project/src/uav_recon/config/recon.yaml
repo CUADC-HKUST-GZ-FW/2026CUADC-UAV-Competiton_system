@@ -8,16 +8,16 @@ recon_geolocator:
     result_write_hz: 20.0
     snapshot_write_hz: 5.0
 
-    # Checkerboard calibration for the 6 mm lens at 1440 x 1080.
-    # 47 of 73 images valid; RMS 0.094184 px; mean per-view 0.077804 px.
+    # Plane 1 added-dataset-2 calibration for the 6 mm lens at 1440 x 1080.
+    # 42 of 43 images valid; RMS 0.419357 px; mean per-view 0.341012 px.
     calibration_valid: true
     calibration_width: 1440
     calibration_height: 1080
-    fx: 1827.52061066
-    fy: 1838.51023114
-    cx: 758.72082983
-    cy: 554.21732693
-    distortion: [-0.06069567773, 0.1550877485, -0.001554175908, -0.00008250286962, 0.06716819185]
+    fx: 1843.999459662704
+    fy: 1839.9668145776227
+    cx: 741.2923010979946
+    cy: 540.5894033192353
+    distortion: [-0.058086138196621846, 0.11520704089566393, -0.001146893949919286, -0.0029760530845389403, 0.20115136412439003]
 
     # Image top points toward the aircraft nose. The optical axis is 70 degrees
     # below horizontal, equivalent to 20 degrees forward from vertical-down.
@@ -32,21 +32,21 @@ recon_geolocator:
     fixed_ground_altitude_msl_m: 0.0
 
     # Keep RTK global data as the 5-10 Hz absolute anchor. Propagate each frame
-    # from that anchor with the MAVROS ENU local EKF position; velocity is used
-    # for cubic Hermite interpolation between local-position samples.
+    # from that anchor with linear interpolation of the MAVROS ENU local EKF
+    # position. Attitude keeps quaternion interpolation between bracketing samples.
     configure_mavlink_rates: true
     global_position_rate_hz: 10.0
-    local_position_rate_hz: 60.0
-    attitude_stream_rate_hz: 60
+    local_position_rate_hz: 30.0
+    attitude_stream_rate_hz: 30
     mavlink_rate_retry_sec: 30.0
     position_solution_mode: rtk_anchor_local_delta
     local_velocity_topic: /mavros/local_position/velocity_local
     global_anchor_max_age_sec: 0.35
-    local_position_max_gap_sec: 0.12
-    local_velocity_max_gap_sec: 0.12
+    local_position_max_gap_sec: 0.20
+    local_velocity_max_gap_sec: 0.20
     local_delta_max_speed_mps: 80.0
     local_global_disagreement_max_m: 5.0
-    telemetry_max_gap_sec: 0.12
+    telemetry_max_gap_sec: 0.20
     rtk_max_gap_sec: 0.35
     max_pending_manifests: 120
     rtk_fixed_min_fix_type: 6
@@ -59,9 +59,9 @@ recon_geolocator:
     tracking_mode: pixel_packets
     packet_gap_timeout_sec: 0.20
     packet_association_gap_sec: 0.10
-    packet_pixel_gate_base_px: 50.0
-    packet_pixel_gate_rate_px_per_sec: 1300.0
-    packet_pixel_gate_max_px: 200.0
+    packet_pixel_gate_base_px: 70.0
+    packet_pixel_gate_rate_px_per_sec: 1500.0
+    packet_pixel_gate_max_px: 220.0
     packet_max_observations: 300
     packet_min_observations: 11
     packet_merge_distance_m: 1.5

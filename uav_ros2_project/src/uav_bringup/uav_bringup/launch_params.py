@@ -42,7 +42,7 @@ COMMON_FCU_ARGUMENT_DEFAULTS = {
     # A / B / R / C / D geometry.
     'a_offset_m': '160.0',
     'b_offset_m': '95.0',
-    'release_offset_m': '50.0',
+    'release_offset_m': '46.0',
     'd_offset_m': '50.0',
 
     # Waypoint acceptance radii.
