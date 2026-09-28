@@ -14,6 +14,7 @@ from uav_recon.core import (
     lerp_tuple,
     project_pixel_to_ground,
     propagate_geodetic_with_local_delta,
+    recognition_event_to_manifest,
     resolve_packet_candidates,
 )
 
@@ -233,15 +234,15 @@ def fused_packet(packet_id, frame_count, east_m):
 def test_pixel_packet_manager_uses_dynamic_gate_and_separate_group_timeout():
     manager = PixelFramePacketManager(
         gap_timeout_sec=0.20,
-        pixel_gate_base_px=50.0,
-        pixel_gate_rate_px_per_sec=1300.0,
-        pixel_gate_max_px=200.0,
+        pixel_gate_base_px=70.0,
+        pixel_gate_rate_px_per_sec=1500.0,
+        pixel_gate_max_px=220.0,
         association_gap_sec=0.10,
     )
     first = manager.add(packet_observation(1.0, 1, (100.0, 100.0)))
     same = manager.add(packet_observation(1.05, 2, (185.0, 100.0)))
     assert same is first
-    assert manager.pixel_gate(0.05) == 115.0
+    assert manager.pixel_gate(0.05) == 145.0
 
     split = manager.add(packet_observation(1.10, 3, (390.0, 100.0)))
     assert split is not first
@@ -274,9 +275,9 @@ def test_relaxed_gate_keeps_60_pixel_per_frame_flight_track_together():
     manager = PixelFramePacketManager(
         gap_timeout_sec=0.20,
         association_gap_sec=0.10,
-        pixel_gate_base_px=50.0,
-        pixel_gate_rate_px_per_sec=1300.0,
-        pixel_gate_max_px=200.0,
+        pixel_gate_base_px=70.0,
+        pixel_gate_rate_px_per_sec=1500.0,
+        pixel_gate_max_px=220.0,
     )
     packets = []
     for index in range(14):
@@ -361,6 +362,74 @@ def test_frame_packet_uses_valid_frame_count_majority_for_label():
     assert fused['class_id'] == 85
     assert fused['label_counts'] == {'85': 7, '50': 4}
     assert abs(fused['label_consensus'] - 7.0 / 11.0) < 1e-9
+
+
+def test_frame_packet_tracks_all_frames_but_fuses_only_valid_geolocations():
+    packet = FramePacket('packet_0001', 'mixed')
+    labels = ['50'] * 5 + ['85'] * 7
+    for index, label in enumerate(labels):
+        observation = packet_observation(
+            timestamp=index / 60.0,
+            frame_number=index,
+            center_px=(720.0 + index, 540.0),
+            label=label,
+        )
+        if index >= 6:
+            observation.latitude = math.nan
+            observation.longitude = math.nan
+            observation.altitude_msl_m = math.nan
+            observation.geolocation_resolved = True
+            observation.geolocation_valid = False
+            observation.geolocation_error = 'telemetry_gap'
+        packet.add(observation)
+
+    fused = packet.fuse(0.10)
+    assert fused['label'] == '85'
+    assert fused['label_counts'] == {'50': 5, '85': 7}
+    assert fused['tracking_observation_count'] == 12
+    assert fused['geolocated_observation_count'] == 6
+    assert fused['telemetry_rejected_observation_count'] == 6
+
+
+def test_recognition_event_stream_converts_every_valid_detection():
+    manifest = recognition_event_to_manifest({
+        'record_type': 'recognition',
+        'det_found': True,
+        'frame': 42,
+        'capture_timestamp_unix_ns': 123000000000,
+        'capture_monotonic_ns': 456000000000,
+        'capture_clock_source': 'camera',
+        'source_sequence': 99,
+        'frame_width': 1440,
+        'frame_height': 1080,
+        'mode': 'digit',
+        'detections': [
+            {
+                'detection_index': 8,
+                'score': 0.90,
+                'roi': [500, 300, 100, 100],
+                'center': [550.0, 350.0],
+                'class_id': 85,
+                'class_prob': 0.95,
+                'class_label': '85',
+            },
+            {
+                'detection_index': 3,
+                'score': 0.92,
+                'roi': [100, 100, 100, 100],
+                'center': [150.0, 150.0],
+                'class_id': 50,
+                'class_prob': 0.96,
+                'class_label': '50',
+            },
+        ],
+    })
+
+    assert manifest['frame'] == 42
+    assert manifest['source_sequence'] == 99
+    assert manifest['count'] == 2
+    assert [crop['class_label'] for crop in manifest['crops']] == ['50', '85']
+    assert [crop['src'] for crop in manifest['crops']] == ['crop_00.jpg', 'crop_01.jpg']
 
 
 def test_packet_candidates_merge_with_frame_count_weight_inside_15m():

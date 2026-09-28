@@ -15,20 +15,21 @@ def generate_launch_description():
         'recon.yaml',
     )
     output_root = LaunchConfiguration('output_root')
+    recognition_event_log_path = LaunchConfiguration('recognition_event_log_path')
     minimum_gps_fix_type = LaunchConfiguration('minimum_gps_fix_type')
 
     return LaunchDescription([
         DeclareLaunchArgument(
             'output_root',
-            default_value=(
-                '/home/nx163/youth-vision-runtime/'
-                'recon_results/current'
+            default_value=os.path.expanduser(
+                '~/youth-vision-runtime/recon_results/current'
             ),
         ),
         DeclareLaunchArgument(
             'minimum_gps_fix_type',
             default_value='6',
         ),
+        DeclareLaunchArgument('recognition_event_log_path', default_value=''),
         Node(
             package='uav_recon',
             executable='recon_geolocator_node',
@@ -38,6 +39,7 @@ def generate_launch_description():
                 config,
                 {
                     'output_root': output_root,
+                    'recognition_event_log_path': recognition_event_log_path,
                     # Keep the current recon_node.py unchanged. Expose the
                     # orchestration-facing name and map it to its existing
                     # parameter.

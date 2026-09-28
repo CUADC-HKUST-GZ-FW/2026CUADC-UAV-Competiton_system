@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${ROOT:-/home/nx163/youth-vision-runtime}"
-ROS_WS="${ROS_WS:-/home/nx163/uav_ros2_project}"
+ROOT="${ROOT:-$HOME/youth-vision-runtime}"
+ROS_WS="${ROS_WS:-$HOME/uav_ros2_project}"
 MODE="${1:-digit}"
 EXPECTED_TARGETS="${2:-0}"
 FCU_URL="${FCU_URL:-udp://0.0.0.0:15001@192.168.144.14:15001}"
@@ -33,12 +33,13 @@ result_dir="$ROOT/recon_results/sessions/$session_id"
 vision_log="$LOG_DIR/vision_${session_id}.log"
 ros_log="$LOG_DIR/ros_${session_id}.log"
 event_log="$ROOT/logs/recognition/recognition_events_${session_id}.jsonl"
+: > "$event_log"
 
 # RAW_CAPTURE_DEFAULT_0903_START
 # The native recorder receives the camera frame before draw_overlay() mutates
 # the display frame, so this MP4 contains no Pose boxes, labels, or FPS text.
 if [[ "${YOUTH_SAVE_RAW_VIDEO:-1}" == "1" && -z "${YOUTH_RECORD_FILE:-}" ]]; then
-  raw_dir="${YOUTH_RAW_VIDEO_DIR:-/home/nx163/camera_recordings}"
+  raw_dir="${YOUTH_RAW_VIDEO_DIR:-$HOME/camera_recordings}"
   mkdir -p "$raw_dir"
   available_kb="$(df -Pk "$raw_dir" | awk 'NR==2 {print $4}')"
   if [[ -n "$available_kb" && "$available_kb" -ge "${YOUTH_RAW_MIN_FREE_KB:-2097152}" ]]; then
@@ -86,6 +87,7 @@ recon_launch=(
   ros2 launch uav_recon recon_with_mavros.launch.py
   "fcu_url:=$FCU_URL"
   "output_root:=$result_dir"
+  "recognition_event_log_path:=$event_log"
   "expected_targets:=$EXPECTED_TARGETS"
 )
 if [[ -n "${RECON_STATIC_HEIGHT_M:-}" ]]; then
@@ -93,6 +95,7 @@ if [[ -n "${RECON_STATIC_HEIGHT_M:-}" ]]; then
     ros2 launch uav_recon recon_static_with_mavros.launch.py
     "fcu_url:=$FCU_URL"
     "output_root:=$result_dir"
+    "recognition_event_log_path:=$event_log"
     "fixed_relative_altitude_m:=$RECON_STATIC_HEIGHT_M"
     "max_horizontal_radius_95_m:=${RECON_MAX_HORIZONTAL_RADIUS_95_M:-0.5}"
   )

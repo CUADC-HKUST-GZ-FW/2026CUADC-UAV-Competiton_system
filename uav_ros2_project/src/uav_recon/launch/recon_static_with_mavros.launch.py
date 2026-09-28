@@ -11,6 +11,7 @@ import os
 def generate_launch_description():
     fcu_url = LaunchConfiguration('fcu_url')
     output_root = LaunchConfiguration('output_root')
+    recognition_event_log_path = LaunchConfiguration('recognition_event_log_path')
     fixed_relative_altitude_m = LaunchConfiguration('fixed_relative_altitude_m')
     max_horizontal_radius_95_m = LaunchConfiguration('max_horizontal_radius_95_m')
     mavros_launch = os.path.join(
@@ -26,8 +27,11 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'output_root',
-            default_value='/home/nx163/youth-vision-runtime/recon_results/current',
+            default_value=os.path.expanduser(
+                '~/youth-vision-runtime/recon_results/current'
+            ),
         ),
+        DeclareLaunchArgument('recognition_event_log_path', default_value=''),
         DeclareLaunchArgument('fixed_relative_altitude_m'),
         DeclareLaunchArgument(
             'max_horizontal_radius_95_m',
@@ -51,6 +55,7 @@ def generate_launch_description():
                 recon_config,
                 {
                     'output_root': output_root,
+                    'recognition_event_log_path': recognition_event_log_path,
                     'tracking_mode': 'legacy_geo_cluster',
                     'ground_altitude_mode': 'fixed_relative',
                     'fixed_relative_altitude_m': ParameterValue(

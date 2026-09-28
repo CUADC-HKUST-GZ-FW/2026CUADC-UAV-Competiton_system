@@ -2,9 +2,15 @@ import math
 import time
 
 import rclpy
+from mavros_msgs.msg import WaypointList
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import (
+    DurabilityPolicy,
+    HistoryPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+)
 from std_msgs.msg import String
 
 from uav_interfaces.msg import ReconTarget, TargetCommand
@@ -28,6 +34,8 @@ class VisionTargetBridge(Node):
         self.declare_parameter('target_retry_interval_sec', 1.0)
         self.declare_parameter('target_selection_candidate_count', 1)
         self.declare_parameter('candidate_collection_timeout_sec', 0.0)
+        self.declare_parameter('target_selection_commit_wp_index', 4)
+        self.declare_parameter('target_submission_deadline_wp_index', 5)
 
         self.heading_deg = float(self.get_parameter('heading_deg').value)
         self.source_topic = str(self.get_parameter('source_topic').value)
@@ -50,6 +58,12 @@ class VisionTargetBridge(Node):
         self.candidate_collection_timeout_sec = float(
             self.get_parameter('candidate_collection_timeout_sec').value
         )
+        self.selection_commit_wp_index = int(
+            self.get_parameter('target_selection_commit_wp_index').value
+        )
+        self.submission_deadline_wp_index = int(
+            self.get_parameter('target_submission_deadline_wp_index').value
+        )
 
         if not math.isfinite(self.heading_deg):
             raise ValueError('heading_deg must be finite')
@@ -64,6 +78,15 @@ class VisionTargetBridge(Node):
             raise ValueError(
                 'candidate_collection_timeout_sec must be finite and non-negative'
             )
+        if self.selection_commit_wp_index < 0:
+            raise ValueError(
+                'target_selection_commit_wp_index must be non-negative'
+            )
+        if self.submission_deadline_wp_index <= self.selection_commit_wp_index:
+            raise ValueError(
+                'target_submission_deadline_wp_index must be greater than '
+                'target_selection_commit_wp_index'
+            )
 
         self.pending_target = None
         self.candidate_targets = []
@@ -73,6 +96,7 @@ class VisionTargetBridge(Node):
         self.target_published_monotonic = 0.0
         self.target_publish_attempts = 0
         self.mission_state = 'UNKNOWN'
+        self.current_mission_seq = None
 
         self.automation_phase = 'waiting_for_target'
         self.automation_started_monotonic = 0.0
@@ -99,6 +123,18 @@ class VisionTargetBridge(Node):
             self.mission_state_callback,
             state_qos,
         )
+        mission_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        self.mission_waypoints_subscription = self.create_subscription(
+            WaypointList,
+            '/mavros/mission/waypoints',
+            self.mission_waypoints_callback,
+            mission_qos,
+        )
         self.automation_timer = self.create_timer(0.2, self.drive_automation)
 
         self.get_logger().info(
@@ -111,7 +147,10 @@ class VisionTargetBridge(Node):
             f'retry_interval_sec={self.retry_interval_sec:.1f} '
             f'selection_candidate_count={self.selection_candidate_count} '
             f'candidate_collection_timeout_sec='
-            f'{self.candidate_collection_timeout_sec:.1f}'
+            f'{self.candidate_collection_timeout_sec:.1f} '
+            f'selection_commit_wp_index={self.selection_commit_wp_index} '
+            f'submission_deadline_wp_index='
+            f'{self.submission_deadline_wp_index}'
         )
 
     @staticmethod
@@ -179,6 +218,34 @@ class VisionTargetBridge(Node):
         )
         self.publish_if_ready()
 
+    def selection_commit_window_open(self):
+        return (
+            self.auto_execute
+            and self.current_mission_seq is not None
+            and self.selection_commit_wp_index
+            <= self.current_mission_seq
+            < self.submission_deadline_wp_index
+        )
+
+    def submission_window_closed(self):
+        return (
+            self.auto_execute
+            and self.current_mission_seq is not None
+            and self.current_mission_seq
+            >= self.submission_deadline_wp_index
+        )
+
+    def select_candidate_at_commit_waypoint(self):
+        if (
+            self.pending_target is None
+            and self.candidate_targets
+            and self.selection_commit_window_open()
+        ):
+            self.select_strongest_candidate(
+                'commit_waypoint_reached '
+                f'current_seq={self.current_mission_seq}'
+            )
+
     def target_callback(self, result):
         if self.target_published or self.pending_target is not None:
             return
@@ -210,8 +277,34 @@ class VisionTargetBridge(Node):
             f'candidate_count={len(self.candidate_targets)}/'
             f'{self.selection_candidate_count}'
         )
-        if len(self.candidate_targets) >= self.selection_candidate_count:
+        if self.selection_commit_window_open():
+            self.select_candidate_at_commit_waypoint()
+        elif len(self.candidate_targets) >= self.selection_candidate_count:
             self.select_strongest_candidate('required_candidate_count_reached')
+
+    def mission_waypoints_callback(self, message):
+        previous_seq = self.current_mission_seq
+        self.current_mission_seq = int(message.current_seq)
+        if previous_seq != self.current_mission_seq:
+            self.get_logger().info(
+                'Mission sequence updated '
+                f'previous_seq={previous_seq} '
+                f'current_seq={self.current_mission_seq} '
+                f'selection_commit_wp_index={self.selection_commit_wp_index} '
+                f'submission_deadline_wp_index='
+                f'{self.submission_deadline_wp_index}'
+            )
+        self.select_candidate_at_commit_waypoint()
+        if (
+            self.target_published
+            and self.automation_phase == 'waiting_for_manager_ack'
+            and self.submission_window_closed()
+        ):
+            self.automation_failed(
+                'target_insert_window_closed '
+                f'current_seq={self.current_mission_seq} '
+                f'deadline_seq={self.submission_deadline_wp_index}'
+            )
 
     def mission_state_callback(self, message):
         self.mission_state = str(message.data)
@@ -243,6 +336,9 @@ class VisionTargetBridge(Node):
             return
         now = time.monotonic()
         if self.pending_target is None:
+            self.select_candidate_at_commit_waypoint()
+            if self.pending_target is not None:
+                return
             if (
                 self.candidate_targets
                 and self.candidate_collection_timeout_sec > 0.0
@@ -252,6 +348,14 @@ class VisionTargetBridge(Node):
                 self.select_strongest_candidate('candidate_collection_timeout')
             return
         if self.automation_phase in self.TERMINAL_PHASES:
+            return
+
+        if self.submission_window_closed():
+            self.automation_failed(
+                'target_insert_window_closed '
+                f'current_seq={self.current_mission_seq} '
+                f'deadline_seq={self.submission_deadline_wp_index}'
+            )
             return
 
         if self.total_timed_out(now):
@@ -301,6 +405,13 @@ class VisionTargetBridge(Node):
         if self.pending_target is None:
             return
         if self.automation_phase in self.TERMINAL_PHASES:
+            return
+        if self.submission_window_closed():
+            self.automation_failed(
+                'target_insert_window_closed '
+                f'current_seq={self.current_mission_seq} '
+                f'deadline_seq={self.submission_deadline_wp_index}'
+            )
             return
         if self.auto_execute:
             if self.automation_phase != 'waiting_for_standby':

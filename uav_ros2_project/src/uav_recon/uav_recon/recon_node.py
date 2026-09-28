@@ -27,13 +27,13 @@ from .core import (
     TimedBuffer,
     TrackManager,
     geodetic_delta_m,
-    hermite_tuple,
     image_center_weight,
     is_empty_target_label,
     lerp_tuple,
     project_pixel_to_ground,
     propagate_geodetic_with_local_delta,
     quat_slerp,
+    recognition_event_to_manifest,
     resolve_packet_candidates,
 )
 
@@ -107,6 +107,12 @@ class ReconGeolocatorNode(Node):
         self.packet_snapshot_scores = {}
         self.packet_clock_capture_time = None
         self.packet_clock_monotonic = None
+        event_log_value = str(self.get_parameter('recognition_event_log_path').value).strip()
+        self.recognition_event_log_path = Path(event_log_value) if event_log_value else None
+        self.recognition_event_offset = 0
+        self.recognition_event_partial = ''
+        self.recognition_event_identity = None
+        self.deferred_packet_groups = []
         self.last_manifest_key = None
         self._ignore_manifest_present_at_startup()
         self.pending_manifests = deque()
@@ -168,8 +174,13 @@ class ReconGeolocatorNode(Node):
         self.create_timer(1.0, self._configure_mavlink_rates)
         poll_period = 1.0 / max(1.0, float(self.get_parameter('manifest_poll_hz').value))
         self.create_timer(poll_period, self._poll_manifest)
+        vision_input = (
+            f'event_log={self.recognition_event_log_path}'
+            if self.recognition_event_log_path is not None
+            else f'manifest={self.manifest_path}'
+        )
         self.get_logger().info(
-            f'recon ready: manifest={self.manifest_path}, output={self.output_root}, '
+            f'recon ready: {vision_input}, output={self.output_root}, '
             f'camera tilt={self.get_parameter("camera_forward_tilt_deg").value:.1f} deg forward, '
             f'{self.get_parameter("camera_left_tilt_deg").value:.1f} deg left, '
             f'position={self.get_parameter("position_solution_mode").value}, '
@@ -177,10 +188,12 @@ class ReconGeolocatorNode(Node):
         )
 
     def _declare_parameters(self):
+        home = str(Path.home())
         values = {
-            'manifest_path': '/home/nx163/youth-vision-runtime/overlays/latest_crops/manifest_fast.json',
-            'frame_source_path': '/home/nx163/youth-vision-runtime/overlays/latest.jpg',
-            'output_root': '/home/nx163/youth-vision-runtime/recon_results/current',
+            'manifest_path': f'{home}/youth-vision-runtime/overlays/latest_crops/manifest_fast.json',
+            'recognition_event_log_path': '',
+            'frame_source_path': f'{home}/youth-vision-runtime/overlays/latest.jpg',
+            'output_root': f'{home}/youth-vision-runtime/recon_results/current',
             'global_position_topic': '/mavros/global_position/global',
             'imu_topic': '/mavros/imu/data',
             'local_pose_topic': '/mavros/local_position/pose',
@@ -190,16 +203,16 @@ class ReconGeolocatorNode(Node):
             'manifest_poll_hz': 40.0,
             'configure_mavlink_rates': True,
             'global_position_rate_hz': 10.0,
-            'local_position_rate_hz': 60.0,
-            'attitude_stream_rate_hz': 60,
+            'local_position_rate_hz': 30.0,
+            'attitude_stream_rate_hz': 30,
             'mavlink_rate_retry_sec': 30.0,
             'position_solution_mode': 'rtk_anchor_local_delta',
             'global_anchor_max_age_sec': 0.35,
-            'local_position_max_gap_sec': 0.12,
-            'local_velocity_max_gap_sec': 0.12,
+            'local_position_max_gap_sec': 0.20,
+            'local_velocity_max_gap_sec': 0.20,
             'local_delta_max_speed_mps': 80.0,
             'local_global_disagreement_max_m': 5.0,
-            'telemetry_max_gap_sec': 0.35,
+            'telemetry_max_gap_sec': 0.20,
             'rtk_max_gap_sec': 0.35,
             'max_pending_manifests': 120,
             'rtk_fixed_min_fix_type': 6,
@@ -220,9 +233,9 @@ class ReconGeolocatorNode(Node):
             'tracking_mode': 'pixel_packets',
             'packet_gap_timeout_sec': 0.20,
             'packet_association_gap_sec': 0.10,
-            'packet_pixel_gate_base_px': 50.0,
-            'packet_pixel_gate_rate_px_per_sec': 1300.0,
-            'packet_pixel_gate_max_px': 200.0,
+            'packet_pixel_gate_base_px': 70.0,
+            'packet_pixel_gate_rate_px_per_sec': 1500.0,
+            'packet_pixel_gate_max_px': 220.0,
             'packet_max_observations': 300,
             'packet_min_observations': 11,
             'packet_merge_distance_m': 1.5,
@@ -425,50 +438,229 @@ class ReconGeolocatorNode(Node):
         )
 
     def _poll_manifest(self):
+        manifests = []
+        if self.recognition_event_log_path is not None:
+            manifests = self._read_recognition_event_manifests()
+        else:
+            try:
+                with self.manifest_path.open('r', encoding='utf-8') as stream:
+                    manifest = json.load(stream)
+                manifests = [manifest]
+            except (OSError, json.JSONDecodeError):
+                self._set_status('waiting_for_vision', str(self.manifest_path))
+
+        for manifest in manifests:
+            self._enqueue_manifest(manifest)
+        self._drain_pending_manifests()
+        if self.tracking_mode == 'pixel_packets':
+            packet_time = self._packet_time_now()
+            if packet_time is not None:
+                self._queue_packet_groups(self.frame_packets.advance(packet_time))
+            self._finalize_ready_packet_groups()
+
+    def _read_recognition_event_manifests(self):
+        path = self.recognition_event_log_path
         try:
-            with self.manifest_path.open('r', encoding='utf-8') as stream:
-                manifest = json.load(stream)
-        except (OSError, json.JSONDecodeError):
-            self._set_status('waiting_for_vision', str(self.manifest_path))
-            return
+            stat = path.stat()
+        except OSError:
+            self._set_status('waiting_for_vision_event_log', str(path))
+            return []
+
+        identity = (stat.st_dev, stat.st_ino)
+        if identity != self.recognition_event_identity or stat.st_size < self.recognition_event_offset:
+            self.recognition_event_identity = identity
+            self.recognition_event_offset = 0
+            self.recognition_event_partial = ''
+
+        try:
+            with path.open('r', encoding='utf-8') as stream:
+                stream.seek(self.recognition_event_offset)
+                chunk = stream.read()
+                self.recognition_event_offset = stream.tell()
+        except OSError as error:
+            self._set_status('waiting_for_vision_event_log', str(error))
+            return []
+        if not chunk:
+            return []
+
+        lines = (self.recognition_event_partial + chunk).split('\n')
+        self.recognition_event_partial = lines.pop()
+        manifests = []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                manifest = recognition_event_to_manifest(json.loads(line))
+            except (json.JSONDecodeError, TypeError, ValueError) as error:
+                self.get_logger().warn(f'invalid recognition event skipped: {error}')
+                continue
+            if manifest is not None:
+                manifests.append(manifest)
+        return manifests
+
+    def _enqueue_manifest(self, manifest):
         capture_ns = int(manifest.get('capture_timestamp_unix_ns', 0))
         frame_number = int(manifest.get('frame', -1))
         key = (capture_ns, frame_number)
-        if key != self.last_manifest_key:
-            self.last_manifest_key = key
-            if capture_ns <= 0:
-                self._set_status(
-                    'vision_timestamp_missing',
-                    'runtime manifest must provide capture_timestamp_unix_ns',
-                )
-            else:
-                self.pending_manifests.append(manifest)
-                maximum = max(1, int(self.get_parameter('max_pending_manifests').value))
-                while len(self.pending_manifests) > maximum:
-                    self.pending_manifests.popleft()
-                    self._set_status(
-                        'telemetry_queue_overflow',
-                        f'pending vision manifests exceeded {maximum}',
-                    )
-        self._drain_pending_manifests()
-        if self.tracking_mode == 'pixel_packets' and not self.pending_manifests:
-            packet_time = self._packet_time_now()
-            if packet_time is not None:
-                self._finalize_packet_groups(
-                    self.frame_packets.advance(packet_time)
-                )
+        if key == self.last_manifest_key:
+            return
+        self.last_manifest_key = key
+        if capture_ns <= 0:
+            self._set_status(
+                'vision_timestamp_missing',
+                'vision event must provide capture_timestamp_unix_ns',
+            )
+            return
+
+        tracked_count = None
+        if self.tracking_mode == 'pixel_packets':
+            tracked_count = self._track_manifest(manifest)
+        if self.tracking_mode != 'pixel_packets' or tracked_count:
+            self.pending_manifests.append(manifest)
+
+        maximum = max(1, int(self.get_parameter('max_pending_manifests').value))
+        while len(self.pending_manifests) > maximum:
+            dropped = self.pending_manifests.popleft()
+            self._resolve_manifest_geolocation(
+                dropped,
+                valid=False,
+                error='telemetry_queue_overflow',
+            )
+            self._set_status(
+                'telemetry_queue_overflow',
+                f'pending vision manifests exceeded {maximum}',
+            )
 
     def _drain_pending_manifests(self):
         while self.pending_manifests:
             manifest = self.pending_manifests[0]
             if not self._process_manifest(manifest):
                 return
-            if self.tracking_mode == 'pixel_packets':
-                capture_ns = int(manifest.get('capture_timestamp_unix_ns', 0))
-                if capture_ns > 0:
-                    self.packet_clock_capture_time = capture_ns * 1e-9
-                    self.packet_clock_monotonic = time.monotonic()
+            self._resolve_manifest_geolocation(
+                manifest,
+                valid=False,
+                error='telemetry_alignment_rejected',
+                unresolved_only=True,
+            )
             self.pending_manifests.popleft()
+            self._finalize_ready_packet_groups()
+
+    def _track_manifest(self, manifest):
+        if manifest.get('_packet_tracking_done'):
+            return len(manifest.get('_packet_entries', []))
+
+        capture_ns = int(manifest.get('capture_timestamp_unix_ns', 0))
+        capture_time = capture_ns * 1e-9
+        self._queue_packet_groups(self.frame_packets.advance(capture_time))
+        self.packet_clock_capture_time = capture_time
+        self.packet_clock_monotonic = time.monotonic()
+
+        frame_width = int(manifest.get('frame_width', 0))
+        frame_height = int(manifest.get('frame_height', 0))
+        if frame_width <= 0 or frame_height <= 0:
+            manifest['_packet_tracking_done'] = True
+            manifest['_packet_entries'] = []
+            self._set_status('vision_geometry_missing', 'frame dimensions absent from vision event')
+            return 0
+
+        camera = self._camera_model(frame_width, frame_height)
+        crop_root = self.manifest_path.parent
+        frame_number = int(manifest.get('frame', -1))
+        source_sequence = int(manifest.get('source_sequence', 0))
+        observations = []
+        entries = []
+        for crop_index, crop in enumerate(manifest.get('crops', [])):
+            label = str(crop.get('class_label', ''))
+            if is_empty_target_label(label):
+                continue
+            center = crop.get('center')
+            if not center or len(center) != 2:
+                continue
+            observation = Observation(
+                timestamp=capture_time,
+                latitude=math.nan,
+                longitude=math.nan,
+                altitude_msl_m=math.nan,
+                label=label,
+                class_id=int(crop.get('class_id', -1)),
+                confidence=float(crop.get('class_prob', 0.0)),
+                pose_score=float(crop.get('pose_score', 0.0)),
+                frame_path=str(self.frame_source_path),
+                crop_path=str(crop_root / crop.get('src', '')),
+                center_distance_norm=min(
+                    1.0,
+                    math.hypot(
+                        (float(center[0]) - camera.cx) / (frame_width * 0.5),
+                        (float(center[1]) - camera.cy) / (frame_height * 0.5),
+                    ),
+                ),
+                frame_number=frame_number,
+                source_sequence=source_sequence,
+                center_px=(float(center[0]), float(center[1])),
+                geolocation_resolved=False,
+                geolocation_valid=False,
+            )
+            observations.append(observation)
+            entries.append({'crop_index': crop_index, 'observation': observation})
+
+        manifest['_packet_tracking_done'] = True
+        manifest['_packet_entries'] = entries
+        packets = self.frame_packets.add_frame(observations)
+        for observation, packet, assignment in zip(
+            observations,
+            packets,
+            self.frame_packets.last_assignments,
+        ):
+            self._preserve_packet_snapshot(packet.packet_id, observation)
+            if assignment['action'] == 'new_packet':
+                self.get_logger().info(
+                    '[RECON_PACKET] stage=packet_started '
+                    f'packet_id={packet.packet_id} '
+                    f'reason={assignment["reason"]} '
+                    f'frame={observation.frame_number} '
+                    f'center=({observation.center_px[0]:.2f},'
+                    f'{observation.center_px[1]:.2f}) '
+                    f'detail={json.dumps(assignment, ensure_ascii=False)}'
+                )
+        self._queue_packet_groups(self.frame_packets.take_limit_reached_group())
+        if observations:
+            self.get_logger().debug(
+                '[RECON_PACKET] stage=frame_tracked '
+                f'frame={frame_number} detections={len(observations)}'
+            )
+        return len(observations)
+
+    @staticmethod
+    def _resolve_manifest_geolocation(
+        manifest,
+        valid,
+        error='',
+        unresolved_only=False,
+    ):
+        for entry in manifest.get('_packet_entries', []):
+            observation = entry['observation']
+            if unresolved_only and observation.geolocation_resolved:
+                continue
+            observation.geolocation_resolved = True
+            observation.geolocation_valid = bool(valid)
+            observation.geolocation_error = '' if valid else str(error)
+
+    def _queue_packet_groups(self, groups):
+        self.deferred_packet_groups.extend(groups)
+
+    def _finalize_ready_packet_groups(self):
+        ready = []
+        waiting = []
+        for group in self.deferred_packet_groups:
+            unresolved = any(
+                not observation.geolocation_resolved
+                for packet in group.packets
+                for observation in packet.observations
+            )
+            (waiting if unresolved else ready).append(group)
+        self.deferred_packet_groups = waiting
+        if ready:
+            self._finalize_packet_groups(ready)
 
     def _packet_time_now(self):
         if (
@@ -492,21 +684,6 @@ class ReconGeolocatorNode(Node):
             return before.value, 'sample'
 
         ratio = (timestamp - before.timestamp) / (after.timestamp - before.timestamp)
-        velocity_gap = float(self.get_parameter('local_velocity_max_gap_sec').value)
-        velocity0 = self.local_velocities.nearest(before.timestamp, velocity_gap)
-        velocity1 = self.local_velocities.nearest(after.timestamp, velocity_gap)
-        if velocity0 is not None and velocity1 is not None:
-            return (
-                hermite_tuple(
-                    before.value,
-                    velocity0,
-                    after.value,
-                    velocity1,
-                    ratio,
-                    after.timestamp - before.timestamp,
-                ),
-                'cubic_hermite',
-            )
         return lerp_tuple(before.value, after.value, ratio), 'linear'
 
     def _resolve_aircraft_position(self, timestamp, max_gap):
@@ -674,83 +851,91 @@ class ReconGeolocatorNode(Node):
             return True
         camera = self._camera_model(frame_width, frame_height)
         crop_root = self.manifest_path.parent
-        if self.tracking_mode == 'pixel_packets':
-            self._finalize_packet_groups(self.frame_packets.advance(capture_time))
         projected = 0
-        packet_observations = []
         frame_number = int(manifest.get('frame', -1))
         source_sequence = int(manifest.get('source_sequence', 0))
-        for crop in manifest.get('crops', []):
-            label = str(crop.get('class_label', ''))
-            if is_empty_target_label(label):
-                continue
-            center = crop.get('center')
-            if not center or len(center) != 2:
-                continue
-            crop_path = crop_root / crop.get('src', '')
-            try:
-                coordinate = project_pixel_to_ground(
-                    center, position, attitude, ground_altitude, camera
-                )
-            except ValueError as error:
-                self._set_status('projection_rejected', str(error))
-                continue
-            observation = Observation(
-                timestamp=capture_time,
-                latitude=coordinate.latitude,
-                longitude=coordinate.longitude,
-                altitude_msl_m=coordinate.altitude_msl_m,
-                label=label,
-                class_id=int(crop.get('class_id', -1)),
-                confidence=float(crop.get('class_prob', 0.0)),
-                pose_score=float(crop.get('pose_score', 0.0)),
-                frame_path=str(self.frame_source_path),
-                crop_path=str(crop_path),
-                horizontal_sigma_m=fix[1],
-                center_distance_norm=min(
-                    1.0,
-                    math.hypot(
-                        (float(center[0]) - camera.cx) / (frame_width * 0.5),
-                        (float(center[1]) - camera.cy) / (frame_height * 0.5),
+        if self.tracking_mode == 'pixel_packets':
+            crops = manifest.get('crops', [])
+            for entry in manifest.get('_packet_entries', []):
+                observation = entry['observation']
+                crop_index = int(entry['crop_index'])
+                if crop_index < 0 or crop_index >= len(crops):
+                    observation.geolocation_resolved = True
+                    observation.geolocation_valid = False
+                    observation.geolocation_error = 'crop_index_out_of_range'
+                    continue
+                center = crops[crop_index].get('center')
+                try:
+                    coordinate = project_pixel_to_ground(
+                        center, position, attitude, ground_altitude, camera
+                    )
+                except ValueError as error:
+                    observation.geolocation_resolved = True
+                    observation.geolocation_valid = False
+                    observation.geolocation_error = str(error)
+                    self._set_status('projection_rejected', str(error))
+                    continue
+                observation.latitude = coordinate.latitude
+                observation.longitude = coordinate.longitude
+                observation.altitude_msl_m = coordinate.altitude_msl_m
+                observation.horizontal_sigma_m = fix[1]
+                observation.position_source = position_context['position_source']
+                observation.global_anchor_age_sec = position_context['global_anchor_age_sec']
+                observation.local_position_method = position_context['local_position_method']
+                observation.local_delta_enu_m = position_context['local_delta_enu_m']
+                observation.geolocation_resolved = True
+                observation.geolocation_valid = True
+                observation.geolocation_error = ''
+                projected += 1
+        else:
+            for crop in manifest.get('crops', []):
+                label = str(crop.get('class_label', ''))
+                if is_empty_target_label(label):
+                    continue
+                center = crop.get('center')
+                if not center or len(center) != 2:
+                    continue
+                crop_path = crop_root / crop.get('src', '')
+                try:
+                    coordinate = project_pixel_to_ground(
+                        center, position, attitude, ground_altitude, camera
+                    )
+                except ValueError as error:
+                    self._set_status('projection_rejected', str(error))
+                    continue
+                observation = Observation(
+                    timestamp=capture_time,
+                    latitude=coordinate.latitude,
+                    longitude=coordinate.longitude,
+                    altitude_msl_m=coordinate.altitude_msl_m,
+                    label=label,
+                    class_id=int(crop.get('class_id', -1)),
+                    confidence=float(crop.get('class_prob', 0.0)),
+                    pose_score=float(crop.get('pose_score', 0.0)),
+                    frame_path=str(self.frame_source_path),
+                    crop_path=str(crop_path),
+                    horizontal_sigma_m=fix[1],
+                    center_distance_norm=min(
+                        1.0,
+                        math.hypot(
+                            (float(center[0]) - camera.cx) / (frame_width * 0.5),
+                            (float(center[1]) - camera.cy) / (frame_height * 0.5),
+                        ),
                     ),
-                ),
-                position_source=position_context['position_source'],
-                global_anchor_age_sec=position_context['global_anchor_age_sec'],
-                local_position_method=position_context['local_position_method'],
-                local_delta_enu_m=position_context['local_delta_enu_m'],
-                frame_number=frame_number,
-                source_sequence=source_sequence,
-                center_px=(float(center[0]), float(center[1])),
-            )
-            if self.tracking_mode == 'pixel_packets':
-                packet_observations.append(observation)
-            else:
+                    position_source=position_context['position_source'],
+                    global_anchor_age_sec=position_context['global_anchor_age_sec'],
+                    local_position_method=position_context['local_position_method'],
+                    local_delta_enu_m=position_context['local_delta_enu_m'],
+                    frame_number=frame_number,
+                    source_sequence=source_sequence,
+                    center_px=(float(center[0]), float(center[1])),
+                )
                 track = self.tracks.add(observation)
                 self._write_track(track)
-            projected += 1
-        if self.tracking_mode == 'pixel_packets':
-            packets = self.frame_packets.add_frame(packet_observations)
-            for observation, packet, assignment in zip(
-                packet_observations,
-                packets,
-                self.frame_packets.last_assignments,
-            ):
-                self._preserve_packet_snapshot(packet.packet_id, observation)
-                if assignment['action'] == 'new_packet':
-                    self.get_logger().info(
-                        '[RECON_PACKET] stage=packet_started '
-                        f'packet_id={packet.packet_id} '
-                        f'reason={assignment["reason"]} '
-                        f'frame={observation.frame_number} '
-                        f'center=({observation.center_px[0]:.2f},'
-                        f'{observation.center_px[1]:.2f}) '
-                        f'detail={json.dumps(assignment, ensure_ascii=False)}'
-                    )
-            self._finalize_packet_groups(
-                self.frame_packets.take_limit_reached_group()
-            )
+                projected += 1
         if projected:
             tracker_detail = (
+                f'tracked={len(manifest.get("_packet_entries", []))}, '
                 f'active_packets={self.frame_packets.active_packet_count}, '
                 f'pending_packets={self.frame_packets.pending_packet_count}'
                 if self.tracking_mode == 'pixel_packets'
@@ -851,6 +1036,15 @@ class ReconGeolocatorNode(Node):
                         'frame_count': raw_count,
                     })
                     continue
+                geolocated_count = len(packet.geolocated_observations())
+                if geolocated_count < minimum:
+                    rejected.append({
+                        'packet_id': packet.packet_id,
+                        'reason': 'insufficient_geolocated_frames',
+                        'tracking_frame_count': raw_count,
+                        'geolocated_frame_count': geolocated_count,
+                    })
+                    continue
                 fused = packet.fuse(
                     float(self.get_parameter('single_observation_sigma_m').value),
                     float(self.get_parameter('center_weight_minimum').value),
@@ -887,6 +1081,15 @@ class ReconGeolocatorNode(Node):
                     'packet_count': int(fused.get('packet_count', 1)),
                     'raw_observation_count': int(
                         fused.get('raw_observation_count', fused['observation_count'])
+                    ),
+                    'tracking_observation_count': int(
+                        fused.get('tracking_observation_count', fused['observation_count'])
+                    ),
+                    'geolocated_observation_count': int(
+                        fused.get('geolocated_observation_count', fused['observation_count'])
+                    ),
+                    'telemetry_rejected_observation_count': int(
+                        fused.get('telemetry_rejected_observation_count', 0)
                     ),
                     'label_counts': dict(fused.get('label_counts', {})),
                     'label_vote_method': 'valid_frame_count_majority',
@@ -981,6 +1184,7 @@ class ReconGeolocatorNode(Node):
         frame_destination = target_dir / 'frame.jpg'
         crop_destination = target_dir / 'crop_128.jpg'
         best = fused['best']
+        coordinate_best = fused.get('coordinate_best', best)
         record = {
             'target_id': target_id,
             'frame_path': f'{target_id}/frame.jpg',
@@ -1010,10 +1214,13 @@ class ReconGeolocatorNode(Node):
                 'mean_center_weight': round(fused['mean_center_weight'], 6),
             },
             'telemetry_alignment': {
-                'position_source': best.position_source,
-                'global_anchor_age_sec': round(best.global_anchor_age_sec, 6),
-                'local_position_method': best.local_position_method,
-                'local_delta_enu_m': [round(float(value), 4) for value in best.local_delta_enu_m],
+                'position_source': coordinate_best.position_source,
+                'global_anchor_age_sec': round(coordinate_best.global_anchor_age_sec, 6),
+                'local_position_method': coordinate_best.local_position_method,
+                'local_delta_enu_m': [
+                    round(float(value), 4)
+                    for value in coordinate_best.local_delta_enu_m
+                ],
                 'observed_rates_hz': {
                     'rtk_global': round(self._observed_rate_hz(self.position_arrivals), 1),
                     'local_position': round(

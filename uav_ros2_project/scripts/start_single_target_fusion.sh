@@ -12,8 +12,8 @@ elif [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_TTY:-}" ]] \
     exit 1
 fi
 
-readonly ROOT="/home/nx163/youth-vision-runtime"
-readonly ROS_WS="/home/nx163/uav_ros2_project"
+readonly ROOT="${HOME}/youth-vision-runtime"
+readonly ROS_WS="${HOME}/uav_ros2_project"
 readonly ROS_SETUP="/opt/ros/humble/setup.bash"
 readonly WS_SETUP="${ROS_WS}/install/setup.bash"
 readonly MODE="${1:-}"
@@ -404,13 +404,14 @@ if [[ "${mavros_count}" != "1" ]]; then
 fi
 
 mkdir -p "${RESULT_DIR}"
+: > "${EVENT_LOG}"
 echo "${MODE}" >"${ROOT}/configs/youth_runtime_mode.txt"
 ln -sfn "sessions/${SESSION_ID}" "${ROOT}/recon_results/latest"
 
 # Preserve untouched camera frames for later review and training. Recording is
 # bounded and is skipped when the configured output volume has less than 2 GiB.
 if [[ "${YOUTH_SAVE_RAW_VIDEO:-1}" == "1" && -z "${YOUTH_RECORD_FILE:-}" ]]; then
-    raw_dir="${YOUTH_RAW_VIDEO_DIR:-/home/nx163/camera_recordings}"
+    raw_dir="${YOUTH_RAW_VIDEO_DIR:-${HOME}/camera_recordings}"
     mkdir -p "${raw_dir}"
     available_kb="$(df -Pk "${raw_dir}" | awk 'NR==2 {print $4}')"
     if [[ -n "${available_kb}" && "${available_kb}" -ge "${YOUTH_RAW_MIN_FREE_KB:-2097152}" ]]; then
@@ -456,13 +457,13 @@ vision_pid=$!
 register_child "${vision_pid}" "vision_runner" "${RUN_DIR}/recon_vision.pid"
 
 setsid bash -lc \
-    "source '${ROS_SETUP}'; source '${WS_SETUP}'; exec ros2 launch uav_recon recon.launch.py output_root:='${RESULT_DIR}' minimum_gps_fix_type:=6" \
+    "source '${ROS_SETUP}'; source '${WS_SETUP}'; exec ros2 launch uav_recon recon.launch.py output_root:='${RESULT_DIR}' recognition_event_log_path:='${EVENT_LOG}' minimum_gps_fix_type:=6" \
     >"${RECON_LOG}" 2>&1 </dev/null {LOCK_FD}>&- &
 recon_pid=$!
 register_child "${recon_pid}" "recon_geolocator" "${RUN_DIR}/recon_ros.pid"
 
 setsid bash -lc \
-    "source '${ROS_SETUP}'; source '${WS_SETUP}'; exec ros2 run uav_vision_bridge vision_target_bridge_node --ros-args -p heading_deg:='${HEADING_DEG}' -p auto_execute:=true -p target_selection_candidate_count:=2 -p candidate_collection_timeout_sec:=10.0" \
+    "source '${ROS_SETUP}'; source '${WS_SETUP}'; exec ros2 run uav_vision_bridge vision_target_bridge_node --ros-args -p heading_deg:='${HEADING_DEG}' -p auto_execute:=true -p target_selection_candidate_count:=2 -p candidate_collection_timeout_sec:=2.0" \
     >"${BRIDGE_LOG}" 2>&1 </dev/null {LOCK_FD}>&- &
 bridge_pid=$!
 register_child "${bridge_pid}" "vision_target_bridge" "${RUN_DIR}/single_target_fusion_bridge.pid"

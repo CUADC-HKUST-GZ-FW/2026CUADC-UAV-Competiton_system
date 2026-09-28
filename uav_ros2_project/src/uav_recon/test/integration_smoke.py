@@ -26,13 +26,17 @@ def main():
         frame_path.write_bytes(b'\xff\xd8\xff\xd9')
         crop_path.write_bytes(b'\xff\xd8\xff\xd9')
         manifest_path = crops / 'manifest.json'
+        event_log_path = root / 'recognition_events.jsonl'
+        event_log_path.write_text('', encoding='utf-8')
 
         rclpy.init(args=[
             '--ros-args',
             '-p', f'manifest_path:={manifest_path}',
+            '-p', f'recognition_event_log_path:={event_log_path}',
             '-p', f'frame_source_path:={frame_path}',
             '-p', f'output_root:={output}',
             '-p', 'calibration_valid:=true',
+            '-p', 'position_solution_mode:=global_interpolation',
             '-p', 'ground_altitude_mode:=fixed_msl',
             '-p', 'fixed_ground_altitude_msl_m:=0.0',
         ])
@@ -46,8 +50,12 @@ def main():
         executor.add_node(source)
 
         try:
-            for sequence in range(8):
+            base_time = time.time() + 0.2
+            for sequence in range(-2, 17):
+                stamp_value = base_time + sequence / 60.0
                 stamp = source.get_clock().now().to_msg()
+                stamp.sec = int(stamp_value)
+                stamp.nanosec = int((stamp_value - stamp.sec) * 1e9)
                 position = NavSatFix()
                 position.header.stamp = stamp
                 position.status.status = NavSatStatus.STATUS_FIX
@@ -63,40 +71,45 @@ def main():
                 position_pub.publish(position)
                 pose_pub.publish(pose)
                 gps_pub.publish(gps)
-                executor.spin_once(timeout_sec=0.04)
-                executor.spin_once(timeout_sec=0.04)
+                executor.spin_once(timeout_sec=0.01)
 
-                capture_ns = time.time_ns()
-                manifest = {
-                    'frame': sequence,
-                    'capture_timestamp_unix_ns': capture_ns,
-                    'capture_monotonic_ns': time.monotonic_ns(),
-                    'capture_clock_source': 'smoke_test',
-                    'source_sequence': sequence,
-                    'frame_width': 1440,
-                    'frame_height': 1080,
-                    'mode': 'digit',
-                    'count': 1,
-                    'crops': [{
-                        'rank': 0,
-                        'detection_index': 0,
-                        'src': 'crop_00.jpg',
-                        'center': [719.5, 539.5],
-                        'class_id': 79,
-                        'class_label': '79',
-                        'class_prob': 0.982,
-                        'pose_score': 0.96,
-                    }],
-                }
-                manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
-                end = time.monotonic() + 0.10
-                while time.monotonic() < end:
-                    executor.spin_once(timeout_sec=0.02)
+            with event_log_path.open('a', encoding='utf-8') as stream:
+                for sequence in range(14):
+                    capture_time = base_time + sequence / 60.0
+                    event = {
+                        'record_type': 'recognition',
+                        'det_found': True,
+                        'frame': sequence,
+                        'capture_timestamp_unix_ns': int(capture_time * 1e9),
+                        'capture_monotonic_ns': time.monotonic_ns(),
+                        'capture_clock_source': 'smoke_test',
+                        'source_sequence': sequence,
+                        'frame_width': 1440,
+                        'frame_height': 1080,
+                        'mode': 'digit',
+                        'detections': [{
+                            'detection_index': 0,
+                            'score': 0.96,
+                            'roi': [670 + sequence, 490, 100, 100],
+                            'center': [719.5, 539.5],
+                            'class_id': 79,
+                            'class_label': '79',
+                            'class_prob': 0.982,
+                        }],
+                    }
+                    stream.write(json.dumps(event) + '\n')
+                stream.flush()
+
+            end = time.monotonic() + 1.0
+            while time.monotonic() < end:
+                executor.spin_once(timeout_sec=0.02)
 
             result_path = output / 'target_001' / 'result.json'
             result = json.loads(result_path.read_text(encoding='utf-8'))
             assert result['recognition']['label'] == '79'
-            assert result['observation_count'] >= 5
+            assert result['observation_count'] == 14
+            assert result['frame_packet_fusion']['tracking_observation_count'] == 14
+            assert result['frame_packet_fusion']['geolocated_observation_count'] == 14
             assert result['rtk_fixed'] is True
             assert result['valid'] is True
             assert (output / result['frame_path']).is_file()
