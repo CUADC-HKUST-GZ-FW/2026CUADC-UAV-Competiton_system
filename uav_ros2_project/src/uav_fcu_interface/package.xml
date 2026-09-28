@@ -12,6 +12,8 @@
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>mavros_msgs</depend>
+  <exec_depend>mavros</exec_depend>
+  <exec_depend>python3-pymavlink</exec_depend>
   <depend>uav_interfaces</depend>
 
   <test_depend>ament_copyright</test_depend>

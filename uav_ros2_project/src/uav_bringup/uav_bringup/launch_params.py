@@ -39,17 +39,20 @@ COMMON_FCU_ARGUMENT_DEFAULTS = {
     'insert_wp_index': '5',
     'resume_wp_index': '10',
 
-    # A / B / R / C / D geometry.
+    # A / B(virtual) / U / R / C(virtual) / D geometry.
     'a_offset_m': '160.0',
-    'b_offset_m': '95.0',
+    'b_offset_m': '110.0',
+    # U leaves time to calculate and upload the dynamic release point.
+    'u_offset_m': '65.0',
     'release_offset_m': '46.0',
     'd_offset_m': '50.0',
 
     # Waypoint acceptance radii.
-    'a_acceptance_radius_m': '30.0',
+    'a_acceptance_radius_m': '20.0',
     'b_acceptance_radius_m': '15.0',
+    'u_acceptance_radius_m': '15.0',
     'c_acceptance_radius_m': '8.0',
-    'd_acceptance_radius_m': '30.0',
+    'd_acceptance_radius_m': '20.0',
 
     # Observation-only A-B trajectory check values present in both profiles.
     'b_check_half_width_m': '17.0',
@@ -59,6 +62,26 @@ COMMON_FCU_ARGUMENT_DEFAULTS = {
 
     # Composite target-segment altitude.
     'mission_altitude_m': '15.0',
+
+    # Dynamic-R prediction. Set dynamic_r_test_mode=true only when the old
+    # fixed-offset test path is explicitly needed.
+    'dynamic_r_enabled': 'true',
+    'dynamic_r_test_mode': 'false',
+    'dynamic_r_test_offset_m': '50.0',
+    'dynamic_r_prediction_window_sec': '1.2',
+    'dynamic_r_min_prediction_samples': '5',
+    'dynamic_r_min_prediction_span_sec': '0.4',
+    'dynamic_r_vz_fit_max_rmse_mps': '0.8',
+    'dynamic_r_max_abs_vertical_accel_mps2': '3.0',
+    'dynamic_r_min_rc_m': '20.0',
+    'dynamic_r_min_u_r_distance_m': '5.0',
+    'dynamic_r_max_iterations': '4',
+    'dynamic_r_convergence_m': '0.5',
+    # Measured payload-servo actuation delay from command to physical release.
+    'dynamic_r_release_delay_sec': '0.7',
+    'dynamic_r_prediction_shadow_mode': 'false',
+    'dynamic_r_update_timeout_sec': '6.0',
+    'aburcd_update_metrics_enabled': 'true',
 }
 
 

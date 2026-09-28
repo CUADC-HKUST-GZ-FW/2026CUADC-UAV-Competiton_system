@@ -1,0 +1,20 @@
+/**:
+  ros__parameters:
+    plugin_denylist:
+      # Keep MAVROS ArduPilot default denylist unchanged.
+      - actuator_control
+      - ftp
+      - hil
+      - altitude
+      - debug_value
+      - image_pub
+      - px4flow
+      - vibration
+      - vision_speed_estimate
+      - wheel_odometry
+
+      # Project-specific SITL optimization:
+      # The project does not use /mavros/param/* services. Disabling the
+      # param plugin avoids the full FCU parameter-table synchronization
+      # competing with mission pull/push traffic during startup.
+      - param
