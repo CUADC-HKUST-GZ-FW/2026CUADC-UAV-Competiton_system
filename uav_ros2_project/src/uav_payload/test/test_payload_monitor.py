@@ -245,7 +245,7 @@ class PayloadMonitorTest(unittest.TestCase):
         events = monitor.observe_rc_out([1500] * 6 + [1900], 1.2)
 
         self.assertEqual(
-            ['command_reached', 'pwm_confirmed'],
+            ['command_reached', 'pwm_candidate_started', 'pwm_confirmed'],
             [event.key for event in events],
         )
         self.assertIn(

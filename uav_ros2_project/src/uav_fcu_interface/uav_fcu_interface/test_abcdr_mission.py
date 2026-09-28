@@ -24,7 +24,7 @@ def make_node_without_ros():
     node.u_acceptance_radius_m = 15.0
     node.c_acceptance_radius_m = 8.0
     node.d_acceptance_radius_m = 30.0
-    node.mission_altitude_m = 35.0
+    node.mission_altitude_m = 15.0
     node.control_mode = 'DRY_RUN'
     node.enable_real_payload_release = False
     node.servo_channel = 7
@@ -62,6 +62,7 @@ def make_node_without_ros():
     node.composite_safe_r_waypoint = None
     node.current_waypoints = None
     node.current_gps = None
+    node.current_state = SimpleNamespace(connected=True)
     node.current_raw_gps = None
     node.current_vfr_hud = None
     node.current_rel_alt_m = None
@@ -192,7 +193,7 @@ def test_abcdr_distances_and_order(heading_deg):
         points['B']['lon'],
         points['U']['lat'],
         points['U']['lon'],
-    ) == pytest.approx(30.0, abs=0.05)
+    ) == pytest.approx(45.0, abs=0.05)
     assert node.distance_m(
         points['B']['lat'],
         points['B']['lon'],
@@ -675,7 +676,7 @@ def test_dynamic_r_prediction_rejects_rc_outside_configured_bounds():
     points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
     node.composite_route_points = points
     node.dynamic_r_test_mode = False
-    node.dynamic_r_min_rc_m = 60.0
+    node.dynamic_r_min_rc_m = 55.0
     snapshot = _prediction_snapshot(node, points)
 
     candidate = node.compute_dynamic_r(snapshot, points['C'])
@@ -1213,3 +1214,37 @@ def test_composite_ab_check_and_c_passage_use_current_task_only():
     assert node.composite_c_confirmed
     assert node.composite_c_confirmation == 'gps_radius'
     assert list(node.gps_history) == []
+
+
+def test_fixed_mode_preserves_original_ard_layout_without_u():
+    node = make_node_without_ros()
+    node.dynamic_r_enabled = False
+    node.release_command_enabled = True
+    points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
+    original = [
+        node.make_nav_waypoint(22.8800 + index * 0.001, 113.4900, 35.0, 15.0)
+        for index in range(14)
+    ]
+
+    mission, a_seq = node.build_composite_mission(points, original, 5, 9)
+
+    assert len(mission) == 14
+    assert a_seq == node.composite_seq_a == 5
+    assert node.composite_seq_u is None
+    assert node.composite_seq_r == 6
+    assert node.composite_seq_release == 7
+    assert node.composite_seq_d == 8
+    assert node.dynamic_indices == {
+        'A': 5, 'U': None, 'R': 6, 'RELEASE': 7, 'D': 8, 'RESUME': 9,
+    }
+    assert [wp.command for wp in mission[5:9]] == [
+        node.MAV_CMD_NAV_WAYPOINT,
+        node.MAV_CMD_NAV_WAYPOINT,
+        node.MAV_CMD_DO_SET_SERVO,
+        node.MAV_CMD_NAV_WAYPOINT,
+    ]
+    assert mission[5].x_lat == points['A']['lat']
+    assert mission[6].x_lat == points['R']['lat']
+    assert mission[8].x_lat == points['D']['lat']
+    assert mission[9].x_lat == original[9].x_lat
+    assert all(wp.x_lat != points['U']['lat'] for wp in mission[5:9])

@@ -156,9 +156,11 @@ class FcuInterfaceMavrosNode(Node):
         # Composite target-segment altitude.
         self.declare_parameter('mission_altitude_m', 15.0)
 
-        # Dynamic-R release point. TEST mode retains the old fixed-offset path;
+        # Dynamic-R release point. release_point_mode is authoritative.
+        self.declare_parameter('release_point_mode', 'fixed')
+        # TEST mode retains the old fixed-offset path;
         # normal mode uses the AB multi-sample predictor below.
-        self.declare_parameter('dynamic_r_enabled', True)
+        self.declare_parameter('dynamic_r_enabled', False)
         self.declare_parameter('dynamic_r_test_mode', False)
         self.declare_parameter('dynamic_r_test_offset_m', 50.0)
         self.declare_parameter('dynamic_r_prediction_window_sec', 1.2)
@@ -277,9 +279,14 @@ class FcuInterfaceMavrosNode(Node):
         )
 
         self.mission_altitude_m = float(self.get_parameter('mission_altitude_m').value)
-        self.dynamic_r_enabled = bool(
-            self.get_parameter('dynamic_r_enabled').value
-        )
+        self.release_point_mode = str(
+            self.get_parameter('release_point_mode').value
+        ).strip().lower()
+        if self.release_point_mode not in {'fixed', 'dynamic', 'shadow'}:
+            raise ValueError(
+                'release_point_mode must be one of: fixed, dynamic, shadow'
+            )
+        self.dynamic_r_enabled = self.release_point_mode in {'dynamic', 'shadow'}
         self.dynamic_r_test_mode = bool(
             self.get_parameter('dynamic_r_test_mode').value
         )
@@ -325,8 +332,8 @@ class FcuInterfaceMavrosNode(Node):
         self.dynamic_r_release_delay_sec = max(
             0.0, float(self.get_parameter('dynamic_r_release_delay_sec').value)
         )
-        self.dynamic_r_prediction_shadow_mode = bool(
-            self.get_parameter('dynamic_r_prediction_shadow_mode').value
+        self.dynamic_r_prediction_shadow_mode = (
+            self.release_point_mode == 'shadow'
         )
         self.dynamic_r_update_timeout_sec = max(
             0.1,
@@ -507,6 +514,7 @@ class FcuInterfaceMavrosNode(Node):
             f'release_command_enabled={self._bool(self.release_command_enabled)} '
             'release_command_reason='
             f'{self._reason(self.release_command_reason)} '
+            f'release_point_mode={self.release_point_mode} '
             f'dynamic_r_enabled={self._bool(self.dynamic_r_enabled)} '
             'dynamic_r_update_timeout_sec='
             f'{self.dynamic_r_update_timeout_sec:.3f} '
@@ -3153,8 +3161,13 @@ class FcuInterfaceMavrosNode(Node):
             )
 
         self.composite_seq_a = int(break_index)
-        self.composite_seq_u = self.composite_seq_a + 1
-        self.composite_seq_r = self.composite_seq_u + 1
+        if self.dynamic_r_enabled:
+            self.composite_seq_u = self.composite_seq_a + 1
+            self.composite_seq_r = self.composite_seq_u + 1
+        else:
+            # Preserve the established A/R/[release]/D mission in fixed mode.
+            self.composite_seq_u = None
+            self.composite_seq_r = self.composite_seq_a + 1
         if self.release_command_enabled:
             self.composite_seq_release = self.composite_seq_r + 1
             self.composite_seq_d = self.composite_seq_release + 1
@@ -3189,19 +3202,20 @@ class FcuInterfaceMavrosNode(Node):
                 altitude_m,
                 self.a_acceptance_radius_m,
             ),
-            self.make_nav_waypoint(
+        ]
+        if self.dynamic_r_enabled:
+            attack_segment.append(self.make_nav_waypoint(
                 abcdr['U']['lat'],
                 abcdr['U']['lon'],
                 altitude_m,
                 self.u_acceptance_radius_m,
-            ),
-            self.make_nav_waypoint(
-                abcdr['R']['lat'],
-                abcdr['R']['lon'],
-                altitude_m,
-                self.c_acceptance_radius_m,
-            ),
-        ]
+            ))
+        attack_segment.append(self.make_nav_waypoint(
+            abcdr['R']['lat'],
+            abcdr['R']['lon'],
+            altitude_m,
+            self.c_acceptance_radius_m,
+        ))
         if self.release_command_enabled:
             attack_segment.append(self.create_release_command())
         attack_segment.extend([

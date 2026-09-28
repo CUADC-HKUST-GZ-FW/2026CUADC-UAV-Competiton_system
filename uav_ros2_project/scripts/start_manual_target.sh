@@ -23,14 +23,23 @@ readonly TARGET_SENDER="${WS_ROOT}/scripts/manual_target_sender.py"
 # 参数
 # ============================================================
 
-if [[ "$#" -ne 3 ]]; then
+if [[ "$#" -eq 3 ]]; then
+    RELEASE_POINT_MODE="fixed"
+elif [[ "$#" -eq 5 && "${4:-}" == "--release-point-mode" ]]; then
+    RELEASE_POINT_MODE="${5:-}"
+else
     echo "Usage:"
-    echo "  $0 <latitude> <longitude> <heading_deg>"
+    echo "  $0 <latitude> <longitude> <heading_deg> [--release-point-mode fixed|dynamic|shadow]"
     echo
     echo "Example:"
-    echo "  $0 30.123456 120.654321 90"
+    echo "  $0 30.123456 120.654321 90 --release-point-mode dynamic"
     exit 2
 fi
+readonly RELEASE_POINT_MODE
+case "${RELEASE_POINT_MODE}" in
+    fixed|dynamic|shadow) ;;
+    *) echo "[ERROR] release point mode must be fixed, dynamic, or shadow" >&2; exit 2 ;;
+esac
 
 LATITUDE="$1"
 LONGITUDE="$2"
@@ -187,7 +196,7 @@ echo "=========================================="
 
 echo "[STARTUP] launching real UAV bringup..."
 
-setsid ros2 launch uav_bringup real_bringup.launch.py &
+setsid ros2 launch uav_bringup real_bringup.launch.py release_point_mode:="${RELEASE_POINT_MODE}" &
 LAUNCH_PID=$!
 
 echo "[STARTUP] ros2 launch pid=${LAUNCH_PID}"

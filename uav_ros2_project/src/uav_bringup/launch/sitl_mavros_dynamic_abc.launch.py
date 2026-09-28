@@ -266,6 +266,7 @@ def generate_launch_description():
             'aburcd_update_metrics_enabled': common[
                 'aburcd_update_metrics_enabled'
             ],
+            'release_point_mode': common['release_point_mode'],
             'dynamic_r_enabled': common['dynamic_r_enabled'],
         }],
     )

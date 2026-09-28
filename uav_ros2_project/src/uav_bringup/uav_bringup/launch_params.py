@@ -63,9 +63,11 @@ COMMON_FCU_ARGUMENT_DEFAULTS = {
     # Composite target-segment altitude.
     'mission_altitude_m': '15.0',
 
+    # Release-point calculation mode: fixed, dynamic, or shadow.
+    'release_point_mode': 'fixed',
     # Dynamic-R prediction. Set dynamic_r_test_mode=true only when the old
     # fixed-offset test path is explicitly needed.
-    'dynamic_r_enabled': 'true',
+    'dynamic_r_enabled': 'false',
     'dynamic_r_test_mode': 'false',
     'dynamic_r_test_offset_m': '50.0',
     'dynamic_r_prediction_window_sec': '1.2',

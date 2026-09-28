@@ -18,6 +18,14 @@ readonly ROS_SETUP="/opt/ros/humble/setup.bash"
 readonly WS_SETUP="${ROS_WS}/install/setup.bash"
 readonly MODE="${1:-}"
 readonly HEADING_INPUT="${2:-}"
+if [[ "$#" -eq 2 ]]; then
+    RELEASE_POINT_MODE="fixed"
+elif [[ "$#" -eq 4 && "${3:-}" == "--release-point-mode" ]]; then
+    RELEASE_POINT_MODE="${4:-}"
+else
+    RELEASE_POINT_MODE=""
+fi
+readonly RELEASE_POINT_MODE
 readonly REQUIRED_TARGETS=3
 readonly DEDUP_RADIUS_M=10.0
 readonly SETTLE_SEC=1.0
@@ -244,12 +252,16 @@ mission manager|/uav_mission_manager/mission_manager_node
 EOF
 }
 
-if [[ "$#" -ne 2 ]] || {
+if { [[ "$#" -ne 2 ]] && [[ "$#" -ne 4 ]]; } || {
     [[ "${MODE}" != "digit" ]] && [[ "${MODE}" != "image" ]];
 }; then
-    echo "usage: $0 [digit|image] [heading_deg]" >&2
+    echo "usage: $0 [digit|image] [heading_deg] [--release-point-mode fixed|dynamic|shadow]" >&2
     exit 2
 fi
+case "${RELEASE_POINT_MODE}" in
+    fixed|dynamic|shadow) ;;
+    *) echo "release point mode must be fixed, dynamic, or shadow" >&2; exit 2 ;;
+esac
 if ! [[ "${HEADING_INPUT}" =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
     echo "heading_deg must be a finite number" >&2
     exit 2
@@ -331,7 +343,7 @@ printf 'pid=%s boot_id=%s start_ticks=%s script=%s session=%s\n' \
     "${SESSION_ID}" \
     >"${LOCK_OWNER}"
 
-echo "startup_begin timestamp=$(date -Is) session_id=${SESSION_ID} mode=${MODE} heading_deg=${HEADING_DEG} required_nonempty_targets=${REQUIRED_TARGETS}"
+echo "startup_begin timestamp=$(date -Is) session_id=${SESSION_ID} mode=${MODE} heading_deg=${HEADING_DEG} release_point_mode=${RELEASE_POINT_MODE} required_nonempty_targets=${REQUIRED_TARGETS}"
 
 for required in \
     "${ROS_SETUP}" \
@@ -389,7 +401,7 @@ if [[ "$(node_count_in_snapshot "${startup_node_snapshot}" /fcu_interface_mavros
 fi
 
 setsid bash -lc \
-    "source '${ROS_SETUP}'; source '${WS_SETUP}'; exec ros2 launch uav_bringup real_bringup.launch.py dry_run:=false allow_mission_upload:=true allow_mode_change:=true enable_real_payload_release:=true" \
+    "source '${ROS_SETUP}'; source '${WS_SETUP}'; exec ros2 launch uav_bringup real_bringup.launch.py dry_run:=false allow_mission_upload:=true allow_mode_change:=true enable_real_payload_release:=true release_point_mode:='${RELEASE_POINT_MODE}'" \
     >"${FLIGHT_LOG}" 2>&1 </dev/null {LOCK_FD}>&- &
 flight_pid=$!
 register_child "${flight_pid}" "flight_bringup" "${RUN_DIR}/manual_flight_bringup.pid"
@@ -597,6 +609,7 @@ FAILURE_REASON="running"
 echo "four-target competition fusion started"
 echo "mode=${MODE}"
 echo "heading_deg=${HEADING_DEG}"
+echo "release_point_mode=${RELEASE_POINT_MODE}"
 echo "required_nonempty_targets=${REQUIRED_TARGETS}"
 echo "selection_rule=$([[ "${MODE}" == "digit" ]] && echo median_numeric_value || echo highest_image_value)"
 echo "session_id=${SESSION_ID}"

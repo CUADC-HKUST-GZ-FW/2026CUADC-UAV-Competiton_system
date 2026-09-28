@@ -39,7 +39,8 @@ class FlightSummaryLoggerNode(Node):
         self.declare_parameter('c_distance_log_period_s', 2.0)
         self.declare_parameter('c_distance_improvement_step_m', 1.0)
         self.declare_parameter('aburcd_update_metrics_enabled', True)
-        self.declare_parameter('dynamic_r_enabled', True)
+        self.declare_parameter('release_point_mode', 'fixed')
+        self.declare_parameter('dynamic_r_enabled', False)
 
         self.enabled = bool(self.get_parameter('enabled').value)
         self.summary_path = self._resolve_summary_path(
@@ -56,9 +57,10 @@ class FlightSummaryLoggerNode(Node):
         self.aburcd_update_metrics_enabled = bool(
             self.get_parameter('aburcd_update_metrics_enabled').value
         )
-        self.dynamic_r_enabled = bool(
-            self.get_parameter('dynamic_r_enabled').value
-        )
+        self.release_point_mode = str(
+            self.get_parameter('release_point_mode').value
+        ).strip().lower()
+        self.dynamic_r_enabled = self.release_point_mode in {'dynamic', 'shadow'}
 
         self._lock = threading.Lock()
         self.active_task_id = 'none'
@@ -1333,6 +1335,7 @@ class FlightSummaryLoggerNode(Node):
             'age_ms': self._coerce_value(values.get('open_gps_age_ms')),
             'valid': str(values.get('open_gps_valid', '')).strip().lower()
             in {'true', '1', 'yes'},
+        }
         self.release_snapshot = {
             'latitude': None if gps is None else gps.get('latitude'),
             'longitude': None if gps is None else gps.get('longitude'),
