@@ -1033,15 +1033,16 @@ class MissionManagerNode(Node):
                     if fault in critical
                     else RuntimeHealthLevel.WARNING.value
                 )
-                log = (
-                    self.get_logger().error
-                    if fault in critical
-                    else self.get_logger().warning
-                )
-                log(
+                message = (
                     self._prefix('RUNTIME_HEALTH')
                     + f' fault={fault} duration_s=0.000 severity={severity}'
                 )
+                # Humble rclpy caches severity per call site. Keep each level
+                # at a separate call site so mixed health faults cannot crash.
+                if fault in critical:
+                    self.get_logger().error(message)
+                else:
+                    self.get_logger().warning(message)
 
         for fault in sorted(previous_faults - current_faults):
             started = self.runtime_fault_since.pop(fault, now)

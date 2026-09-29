@@ -315,6 +315,29 @@ class MissionSafetyTest(unittest.TestCase):
         self.assertTrue(recovered_snapshot['ready_for_attack'])
         self.assertNotIn('gps_data_stale', recovered_snapshot['runtime_faults'])
 
+    def test_runtime_health_warning_then_critical_does_not_crash(self):
+        self.make_standby_healthy()
+        self.node.last_gps_time = (
+            time.monotonic() - self.node.gps_timeout_sec - 0.1
+        )
+
+        self.node.health_timer_callback()
+        self.assertEqual('WARNING', self.node.runtime_health_level.value)
+
+        self.node.last_gps_time = time.monotonic()
+        self.node.gps_healthy = True
+        self.node.health_timer_callback()
+        self.assertEqual('OK', self.node.runtime_health_level.value)
+
+        self.node.fcu_system_status = next(
+            iter(self.node.serious_system_statuses)
+        )
+        self.node.last_fcu_state_time = time.monotonic()
+        self.node.health_timer_callback()
+
+        self.assertEqual(MissionState.SAFE, self.node.state)
+        self.assertEqual('CRITICAL', self.node.runtime_health_level.value)
+
     def test_standby_link_stale_returns_to_wait_fcu(self):
         self.make_standby_healthy()
         self.node.last_fcu_state_time = (
