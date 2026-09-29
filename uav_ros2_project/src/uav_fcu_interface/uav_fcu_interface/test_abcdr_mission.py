@@ -520,7 +520,10 @@ def test_composite_aurd_layout_keeps_b_and_c_virtual():
     assert all(wp.x_lat != points['C']['lat'] for wp in mission[5:10])
 
 
-def _prediction_snapshot(node, points, vertical_speeds=None, ground_speed=20.0):
+def _prediction_snapshot(
+    node, points, vertical_speeds=None, ground_speed=20.0,
+    relative_altitude_m=15.0,
+):
     vertical_speeds = vertical_speeds or [0.0] * 5
     b_time = 100.0
     samples = []
@@ -540,11 +543,11 @@ def _prediction_snapshot(node, points, vertical_speeds=None, ground_speed=20.0):
             'ground_speed_mps': ground_speed,
             'vertical_speed_mps': float(vertical_speed),
             'heading_deg': 90.0,
-            'relative_altitude_m': 15.0,
+            'relative_altitude_m': float(relative_altitude_m),
         })
     return {
         'timestamp_monotonic': b_time,
-        'relative_altitude_m': 15.0,
+        'relative_altitude_m': float(relative_altitude_m),
         'relative_altitude_age_sec': 0.0,
         'prediction_samples': samples,
     }
@@ -584,20 +587,24 @@ def test_dynamic_r_prediction_level_flight_matches_ballistic_solution():
 
     assert candidate['valid']
     assert candidate['reason'] == 'ab_multisample_prediction'
-    expected_fall_time = math.sqrt(2.0 * node.mission_altitude_m / 9.80665)
+    expected_fall_time = math.sqrt(2.0 * snapshot['relative_altitude_m'] / 9.80665)
     assert candidate['prediction']['predicted_height_r_m'] == pytest.approx(
-        node.mission_altitude_m
+        snapshot['relative_altitude_m']
     )
     assert candidate['prediction']['predicted_vz_r_mps'] == pytest.approx(0.0)
-    assert candidate['prediction']['vertical_prediction_mode'] == 'mission_altitude_level'
+    assert candidate['prediction']['vertical_prediction_mode'] == 'trend'
+    assert candidate['prediction']['commanded_altitude_r_m'] == pytest.approx(
+        node.mission_altitude_m
+    )
     assert candidate['rc_dynamic_m'] == pytest.approx(
         20.0 * (expected_fall_time + node.dynamic_r_release_delay_sec), abs=0.1
     )
+    assert candidate['prediction']['iteration_count'] >= 2
     assert candidate['prediction']['vz_estimation_mode'] == 'trend'
     assert node.validate_dynamic_r_candidate(candidate)[0]
 
 
-def test_dynamic_r_prediction_vertical_ab_trend_does_not_bias_release_height():
+def test_dynamic_r_prediction_descending_flight_shortens_rc():
     node = make_node_without_ros()
     node.mission_altitude_m = 15.0
     points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
@@ -608,18 +615,40 @@ def test_dynamic_r_prediction_vertical_ab_trend_does_not_bias_release_height():
     candidate = node.compute_dynamic_r(snapshot, points['C'])
 
     assert candidate['valid']
-    assert candidate['prediction']['predicted_height_r_m'] == pytest.approx(15.0)
-    assert candidate['prediction']['predicted_vz_r_mps'] == pytest.approx(0.0)
-    assert candidate['prediction']['vertical_prediction_mode'] == 'mission_altitude_level'
+    assert candidate['prediction']['predicted_height_r_m'] < 15.0
+    assert candidate['prediction']['predicted_vz_r_mps'] == pytest.approx(-1.0)
+    assert candidate['prediction']['vertical_prediction_mode'] == 'trend'
     expected_fall_time = math.sqrt(2.0 * 15.0 / 9.80665)
+    assert candidate['rc_dynamic_m'] < (
+        20.0 * (expected_fall_time + node.dynamic_r_release_delay_sec)
+    )
+
+
+def test_dynamic_r_prediction_uses_actual_height_not_commanded_altitude():
+    node = make_node_without_ros()
+    node.mission_altitude_m = 20.0
+    points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
+    node.composite_route_points = points
+    node.dynamic_r_test_mode = False
+    snapshot = _prediction_snapshot(node, points, relative_altitude_m=12.0)
+
+    candidate = node.compute_dynamic_r(snapshot, points['C'])
+
+    assert candidate['valid']
+    assert candidate['prediction']['height_source'] == 'rel_alt'
+    assert candidate['prediction']['height_b_m'] == pytest.approx(12.0)
+    assert candidate['prediction']['predicted_height_r_m'] == pytest.approx(12.0)
+    assert candidate['prediction']['predicted_vz_r_mps'] == pytest.approx(0.0)
+    assert candidate['prediction']['commanded_altitude_r_m'] == pytest.approx(20.0)
+    assert candidate['alt'] == pytest.approx(20.0)
+    expected_fall_time = math.sqrt(2.0 * 12.0 / 9.80665)
     assert candidate['rc_dynamic_m'] == pytest.approx(
         20.0 * (expected_fall_time + node.dynamic_r_release_delay_sec), abs=0.1
     )
 
 
-def test_dynamic_r_prediction_uses_configured_mission_altitude():
+def test_dynamic_r_prediction_damping_vertical_trend_levels_without_overshoot():
     node = make_node_without_ros()
-    node.mission_altitude_m = 20.0
     points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
     node.composite_route_points = points
     node.dynamic_r_test_mode = False
@@ -631,13 +660,10 @@ def test_dynamic_r_prediction_uses_configured_mission_altitude():
 
     assert candidate['valid']
     assert candidate['prediction']['vz_estimation_mode'] == 'trend'
-    assert candidate['prediction']['vertical_prediction_mode'] == 'mission_altitude_level'
-    assert candidate['prediction']['predicted_height_r_m'] == pytest.approx(20.0)
+    assert candidate['prediction']['vertical_prediction_mode'] == 'trend_to_level'
     assert candidate['prediction']['predicted_vz_r_mps'] == pytest.approx(0.0)
-    expected_fall_time = math.sqrt(2.0 * 20.0 / 9.80665)
-    assert candidate['rc_dynamic_m'] == pytest.approx(
-        20.0 * (expected_fall_time + node.dynamic_r_release_delay_sec), abs=0.1
-    )
+    assert candidate['prediction']['vertical_zero_crossing_sec'] > 0.0
+    assert candidate['prediction']['predicted_height_r_m'] < 15.0
 
 
 def test_dynamic_r_prediction_bad_vz_fit_falls_back_to_weighted_mean():
@@ -676,8 +702,7 @@ def test_dynamic_r_prediction_rejects_rc_outside_configured_bounds():
     points = node.compute_abcdr_points(22.8848, 113.4956, 90.0)
     node.composite_route_points = points
     node.dynamic_r_test_mode = False
-    node.dynamic_r_min_rc_m = 55.0
-    snapshot = _prediction_snapshot(node, points)
+    snapshot = _prediction_snapshot(node, points, ground_speed=25.0)
 
     candidate = node.compute_dynamic_r(snapshot, points['C'])
 
