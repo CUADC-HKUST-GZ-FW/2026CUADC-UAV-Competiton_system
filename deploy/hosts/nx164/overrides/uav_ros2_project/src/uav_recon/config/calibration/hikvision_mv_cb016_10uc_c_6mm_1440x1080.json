@@ -1,0 +1,1053 @@
+{
+  "model": "OpenCV pinhole camera model with radial-tangential distortion",
+  "source": "added_plane2_3",
+  "image_size_pixels": {
+    "width": 1440,
+    "height": 1080
+  },
+  "checkerboard": {
+    "squares": {
+      "columns": 10,
+      "rows": 7
+    },
+    "inner_corners": {
+      "columns": 9,
+      "rows": 6
+    },
+    "square_size_mm": {
+      "horizontal": 101.0,
+      "vertical": 101.0
+    }
+  },
+  "preprocessing": {
+    "candidate_methods": [
+      "raw",
+      "clahe",
+      "sharp",
+      "clahe_sharp"
+    ],
+    "selection": "first successful method in the listed order",
+    "clahe_clip_limit": 2.0,
+    "clahe_tile_grid": [
+      8,
+      8
+    ],
+    "method_counts": {
+      "raw": 64,
+      "clahe": 0,
+      "sharp": 0,
+      "clahe_sharp": 0
+    }
+  },
+  "camera_matrix": [
+    [
+      1828.373814078775,
+      0.0,
+      712.8481256664596
+    ],
+    [
+      0.0,
+      1822.9903742478718,
+      531.4385096873091
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "field_of_view_degrees": {
+    "horizontal": 42.98830212299821,
+    "vertical": 33.00032650311327
+  },
+  "distortion_coefficients": {
+    "k1": -0.07770314668269894,
+    "k2": 0.31954190365146085,
+    "p1": -0.0021732923547375807,
+    "p2": -0.0028998802000114133,
+    "k3": -0.3803288595163144
+  },
+  "quality": {
+    "rms_reprojection_error_pixels": 0.4203594862253123,
+    "mean_view_reprojection_error_pixels": 0.3439873834140599,
+    "max_view_reprojection_error_pixels": 0.4704923629760742
+  },
+  "image_counts": {
+    "total": 66,
+    "corner_detections_before_outlier_filter": 64,
+    "used": 64,
+    "rejected": 2
+  },
+  "used_images": [
+    {
+      "file": "Image_20260924142846822.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.2701627016067505,
+      "rotation_vector": [
+        -0.15274359147557584,
+        0.22387154737565057,
+        3.1179532576035593
+      ],
+      "translation_vector_mm": [
+        439.1706408042217,
+        207.29522310447305,
+        1295.1231466256181
+      ]
+    },
+    {
+      "file": "Image_20260924142849753.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.27936527132987976,
+      "rotation_vector": [
+        -0.1451448606399106,
+        0.23385330908964513,
+        3.1035630256904
+      ],
+      "translation_vector_mm": [
+        443.4685681607397,
+        210.31412885765985,
+        1293.8627231938465
+      ]
+    },
+    {
+      "file": "Image_20260924142856579.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.2772778570652008,
+      "rotation_vector": [
+        -0.16647363790704928,
+        0.21569713345770672,
+        3.087747730980186
+      ],
+      "translation_vector_mm": [
+        435.3077260698683,
+        195.449868968229,
+        1334.285611449337
+      ]
+    },
+    {
+      "file": "Image_20260924142937359.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.26291757822036743,
+      "rotation_vector": [
+        0.1698473598724838,
+        -0.21108474471309013,
+        -3.0778885571595294
+      ],
+      "translation_vector_mm": [
+        425.29895472141163,
+        233.53443724864795,
+        1322.4731082681667
+      ]
+    },
+    {
+      "file": "Image_20260924142941233.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.24972088634967804,
+      "rotation_vector": [
+        0.1598293290458597,
+        -0.20108014660041557,
+        -3.0846845465938033
+      ],
+      "translation_vector_mm": [
+        433.4305543025077,
+        220.82912879202863,
+        1319.3879925992674
+      ]
+    },
+    {
+      "file": "Image_20260924142950371.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.2932506799697876,
+      "rotation_vector": [
+        -0.1460711894770974,
+        0.22956706320750592,
+        3.0739574763198236
+      ],
+      "translation_vector_mm": [
+        458.8855961238516,
+        213.52560321202972,
+        1292.443341595883
+      ]
+    },
+    {
+      "file": "Image_20260924142954382.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.29448485374450684,
+      "rotation_vector": [
+        -0.14443438459734945,
+        0.21683986507173594,
+        3.071942976929465
+      ],
+      "translation_vector_mm": [
+        457.13036834880336,
+        196.87523215174664,
+        1286.9171895420327
+      ]
+    },
+    {
+      "file": "Image_20260924143001734.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.27153560519218445,
+      "rotation_vector": [
+        0.20144338282581636,
+        -0.22144609062007511,
+        -3.083757039354096
+      ],
+      "translation_vector_mm": [
+        404.1750904792111,
+        269.9391406755625,
+        1272.9213175380266
+      ]
+    },
+    {
+      "file": "Image_20260924143005765.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.2798200249671936,
+      "rotation_vector": [
+        0.20571852878622193,
+        -0.21305919864116804,
+        -3.088563894705165
+      ],
+      "translation_vector_mm": [
+        399.35757778898045,
+        258.6818073256992,
+        1275.692419544824
+      ]
+    },
+    {
+      "file": "Image_20260924143130561.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.2995814085006714,
+      "rotation_vector": [
+        -0.08357028302365674,
+        0.2200872770943156,
+        3.060270499869839
+      ],
+      "translation_vector_mm": [
+        336.564872597457,
+        95.01520353215878,
+        1350.1998627072264
+      ]
+    },
+    {
+      "file": "Image_20260924143133870.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.27105504274368286,
+      "rotation_vector": [
+        -0.05573490390421928,
+        0.21983570378106193,
+        3.099998141406352
+      ],
+      "translation_vector_mm": [
+        366.60493466456523,
+        101.62779695679399,
+        1341.8716428677442
+      ]
+    },
+    {
+      "file": "Image_20260924143136906.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.2759120464324951,
+      "rotation_vector": [
+        -0.08022644928522611,
+        0.22767740018818258,
+        3.0839983943341696
+      ],
+      "translation_vector_mm": [
+        333.8457091460622,
+        106.08697308899454,
+        1349.626587972673
+      ]
+    },
+    {
+      "file": "Image_20260924143146938.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.28047457337379456,
+      "rotation_vector": [
+        -0.04215733857140911,
+        -0.22155569793551408,
+        -3.13007486179039
+      ],
+      "translation_vector_mm": [
+        516.9814090220493,
+        122.85936802530452,
+        1317.6533064519922
+      ]
+    },
+    {
+      "file": "Image_20260924143150071.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.2723842263221741,
+      "rotation_vector": [
+        0.04363018401165693,
+        0.21953386674891603,
+        3.1340710512253764
+      ],
+      "translation_vector_mm": [
+        509.16466441745905,
+        117.94221335847288,
+        1320.219562528008
+      ]
+    },
+    {
+      "file": "Image_20260924143200816.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.24240827560424805,
+      "rotation_vector": [
+        -0.002220813357388359,
+        -0.2856100823231089,
+        -3.117447505003148
+      ],
+      "translation_vector_mm": [
+        448.56926044685713,
+        340.2524853904112,
+        1287.253400418806
+      ]
+    },
+    {
+      "file": "Image_20260924143203609.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.252425879240036,
+      "rotation_vector": [
+        -0.00736580408214957,
+        -0.2719243461429746,
+        -3.1041880303753446
+      ],
+      "translation_vector_mm": [
+        455.6933510142751,
+        331.3231652113261,
+        1285.3937880514306
+      ]
+    },
+    {
+      "file": "Image_20260924143208556.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.2298898994922638,
+      "rotation_vector": [
+        -0.08866568964722778,
+        0.26497052348190314,
+        3.0816194862091737
+      ],
+      "translation_vector_mm": [
+        373.27338527267256,
+        296.20761800476373,
+        1313.430535884035
+      ]
+    },
+    {
+      "file": "Image_20260924143211650.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.24454765021800995,
+      "rotation_vector": [
+        -0.10250052541002465,
+        0.2598710096655478,
+        3.096005384332635
+      ],
+      "translation_vector_mm": [
+        360.0601647870511,
+        293.1276114093347,
+        1313.255726620128
+      ]
+    },
+    {
+      "file": "Image_20260924143245949.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.46174949407577515,
+      "rotation_vector": [
+        -0.023725253267318416,
+        0.7466640760659006,
+        2.9025209960455496
+      ],
+      "translation_vector_mm": [
+        384.7937837735228,
+        10.919062589433034,
+        1391.4814736095093
+      ]
+    },
+    {
+      "file": "Image_20260924143248915.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.45450499653816223,
+      "rotation_vector": [
+        -0.017625777133918236,
+        0.746070868904089,
+        2.890063319400565
+      ],
+      "translation_vector_mm": [
+        384.88994226532975,
+        5.7300276040811955,
+        1395.2997895395226
+      ]
+    },
+    {
+      "file": "Image_20260924143256378.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.45846524834632874,
+      "rotation_vector": [
+        -0.06840111414336768,
+        0.7606550865320417,
+        3.0150203035342256
+      ],
+      "translation_vector_mm": [
+        386.4926389048605,
+        54.87723022217249,
+        1398.2605642681208
+      ]
+    },
+    {
+      "file": "Image_20260924143259046.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.46215274930000305,
+      "rotation_vector": [
+        -0.0658722606680417,
+        0.7590863145891157,
+        3.012846963697913
+      ],
+      "translation_vector_mm": [
+        389.4469388296966,
+        50.66123474410739,
+        1401.295502807578
+      ]
+    },
+    {
+      "file": "Image_20260924143314223.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.4642469584941864,
+      "rotation_vector": [
+        0.08528101663363502,
+        -0.7043733975677474,
+        -2.8826077943278587
+      ],
+      "translation_vector_mm": [
+        422.0908072912159,
+        169.32230963908702,
+        1383.8384538417786
+      ]
+    },
+    {
+      "file": "Image_20260924143318023.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.46012082695961,
+      "rotation_vector": [
+        0.06576490961881565,
+        -0.731888713058159,
+        -2.8647604932506505
+      ],
+      "translation_vector_mm": [
+        444.9285275414279,
+        205.7264792183352,
+        1380.3200471545401
+      ]
+    },
+    {
+      "file": "Image_20260924143323031.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.45096561312675476,
+      "rotation_vector": [
+        0.050638027209762695,
+        -0.9138185896064722,
+        -2.9979250418880747
+      ],
+      "translation_vector_mm": [
+        408.3895745315803,
+        300.95267261338466,
+        1376.3104679159562
+      ]
+    },
+    {
+      "file": "Image_20260924143327158.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.45496615767478943,
+      "rotation_vector": [
+        0.049335221391582244,
+        -0.9113146745551718,
+        -2.9934435680134404
+      ],
+      "translation_vector_mm": [
+        408.1483044524241,
+        299.0556302200477,
+        1375.6395122639653
+      ]
+    },
+    {
+      "file": "Image_20260924143344439.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.4594573676586151,
+      "rotation_vector": [
+        -0.09611284491215748,
+        0.7134266710693551,
+        2.971210437001027
+      ],
+      "translation_vector_mm": [
+        345.00909118915894,
+        6.87293029354898,
+        1389.4860966938188
+      ]
+    },
+    {
+      "file": "Image_20260924143347645.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.4530067443847656,
+      "rotation_vector": [
+        -0.10251926713146094,
+        0.7091160817002763,
+        2.978589114463978
+      ],
+      "translation_vector_mm": [
+        340.5546348165668,
+        -2.344790405469643,
+        1383.1392707916073
+      ]
+    },
+    {
+      "file": "Image_20260924143400326.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.46524378657341003,
+      "rotation_vector": [
+        0.047707977370453736,
+        -0.7548198690223664,
+        -2.9217825204343484
+      ],
+      "translation_vector_mm": [
+        503.7968931991456,
+        150.13882090376745,
+        1372.30896425995
+      ]
+    },
+    {
+      "file": "Image_20260924143411013.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.44205591082572937,
+      "rotation_vector": [
+        -0.1019505176785265,
+        0.9176555243207027,
+        2.923332603708998
+      ],
+      "translation_vector_mm": [
+        362.2230784800838,
+        315.05225257205916,
+        1371.8816237293888
+      ]
+    },
+    {
+      "file": "Image_20260924143503777.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.4704923629760742,
+      "rotation_vector": [
+        -0.054332490813804216,
+        0.880486316172253,
+        2.889934143752153
+      ],
+      "translation_vector_mm": [
+        392.0336732229689,
+        235.22183670717862,
+        1256.162951978814
+      ]
+    },
+    {
+      "file": "Image_20260924143513552.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.4663892984390259,
+      "rotation_vector": [
+        -0.004065875602195371,
+        -0.8585561262510855,
+        -3.0073602082587114
+      ],
+      "translation_vector_mm": [
+        475.09208072104167,
+        265.1554927491329,
+        1221.9059483168658
+      ]
+    },
+    {
+      "file": "Image_20260924143517852.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.4659852385520935,
+      "rotation_vector": [
+        0.011339481787223243,
+        0.8417598502386601,
+        3.024192966066141
+      ],
+      "translation_vector_mm": [
+        479.2411459598704,
+        235.30143787653694,
+        1223.8071714976654
+      ]
+    },
+    {
+      "file": "Image_20260924143547551.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.35598620772361755,
+      "rotation_vector": [
+        -0.5288294347264758,
+        -0.16316789881339458,
+        -2.972377905584525
+      ],
+      "translation_vector_mm": [
+        185.9436656622106,
+        174.428049304152,
+        1367.0234189016724
+      ]
+    },
+    {
+      "file": "Image_20260924143552460.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.3533959984779358,
+      "rotation_vector": [
+        -0.5111025313364842,
+        -0.17844818963562523,
+        -2.981293445142272
+      ],
+      "translation_vector_mm": [
+        161.94785206723162,
+        188.06081843667081,
+        1368.0278946435237
+      ]
+    },
+    {
+      "file": "Image_20260924143600298.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.34649011492729187,
+      "rotation_vector": [
+        -0.7033945581523886,
+        -0.1691987065955743,
+        -3.0471588869075816
+      ],
+      "translation_vector_mm": [
+        411.6607888399694,
+        216.88510143021387,
+        1375.2213525035384
+      ]
+    },
+    {
+      "file": "Image_20260924143603660.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.35024839639663696,
+      "rotation_vector": [
+        -0.7150273606074867,
+        -0.16196568293945207,
+        -3.0481275361630678
+      ],
+      "translation_vector_mm": [
+        421.8417833154182,
+        203.53739352935912,
+        1371.6067109395578
+      ]
+    },
+    {
+      "file": "Image_20260924143611498.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.340847909450531,
+      "rotation_vector": [
+        0.6289016692715601,
+        0.2029085701793661,
+        2.9800694742559526
+      ],
+      "translation_vector_mm": [
+        373.11379009675017,
+        285.954985381038,
+        1389.2116338205526
+      ]
+    },
+    {
+      "file": "Image_20260924143615049.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.341172993183136,
+      "rotation_vector": [
+        0.6601578677788278,
+        0.21026429238210545,
+        2.97968843751766
+      ],
+      "translation_vector_mm": [
+        406.7330790887461,
+        291.43987375276544,
+        1381.744291701021
+      ]
+    },
+    {
+      "file": "Image_20260924143621651.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.3434763550758362,
+      "rotation_vector": [
+        -0.6135589022081791,
+        -0.12754758456348791,
+        -2.962593145918051
+      ],
+      "translation_vector_mm": [
+        356.15260232544927,
+        190.54119160655412,
+        1404.8150349950797
+      ]
+    },
+    {
+      "file": "Image_20260924143625874.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.34287917613983154,
+      "rotation_vector": [
+        -0.6434032145408229,
+        -0.12196975480170719,
+        -2.9585600897525097
+      ],
+      "translation_vector_mm": [
+        391.6955895363424,
+        184.7557850600041,
+        1396.699491226496
+      ]
+    },
+    {
+      "file": "Image_20260924143635534.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.34554436802864075,
+      "rotation_vector": [
+        -0.4294862226396433,
+        -0.05233439382799877,
+        -3.07294559647199
+      ],
+      "translation_vector_mm": [
+        173.7374616833385,
+        118.09531611264984,
+        1444.61454414476
+      ]
+    },
+    {
+      "file": "Image_20260924143639141.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.33636361360549927,
+      "rotation_vector": [
+        -0.41839013377615963,
+        -0.04526140047773948,
+        -3.0560855527425823
+      ],
+      "translation_vector_mm": [
+        165.23574853184337,
+        106.58542697539949,
+        1446.129010623555
+      ]
+    },
+    {
+      "file": "Image_20260924143646075.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.3195716142654419,
+      "rotation_vector": [
+        -0.6823593938671978,
+        -0.06432667539249047,
+        -3.0610826551277914
+      ],
+      "translation_vector_mm": [
+        504.6850336646617,
+        130.6619761311009,
+        1422.9445090438649
+      ]
+    },
+    {
+      "file": "Image_20260924143649460.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.3223544657230377,
+      "rotation_vector": [
+        -0.6954093289162907,
+        -0.061692706487936844,
+        -3.0435597530046588
+      ],
+      "translation_vector_mm": [
+        518.3973391182336,
+        125.32752687551626,
+        1416.3026267177256
+      ]
+    },
+    {
+      "file": "Image_20260924143657602.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.3029489517211914,
+      "rotation_vector": [
+        0.6428642752747651,
+        0.23317193474065023,
+        3.0049078997837517
+      ],
+      "translation_vector_mm": [
+        525.3375576311465,
+        389.1724911602166,
+        1411.777122812626
+      ]
+    },
+    {
+      "file": "Image_20260924143702159.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.2943987548351288,
+      "rotation_vector": [
+        0.6281769514910646,
+        0.21090297883855444,
+        2.9825392943213256
+      ],
+      "translation_vector_mm": [
+        527.7854204583019,
+        363.4605314265542,
+        1431.671925156272
+      ]
+    },
+    {
+      "file": "Image_20260924143708215.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.2882605195045471,
+      "rotation_vector": [
+        0.3482448326508399,
+        0.2344594061163695,
+        3.003117839363324
+      ],
+      "translation_vector_mm": [
+        197.55693442217628,
+        372.9127620722008,
+        1557.3268415362843
+      ]
+    },
+    {
+      "file": "Image_20260924143712817.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.2823449373245239,
+      "rotation_vector": [
+        0.33025133378298077,
+        0.2671880571835546,
+        3.0165200044851312
+      ],
+      "translation_vector_mm": [
+        161.88766375706987,
+        409.11238227541935,
+        1554.1902310295316
+      ]
+    },
+    {
+      "file": "Image_20260924143745072.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.3254494071006775,
+      "rotation_vector": [
+        -0.5596936049930448,
+        0.15590594412059175,
+        2.976469452378625
+      ],
+      "translation_vector_mm": [
+        455.914033166703,
+        136.97130684540352,
+        1586.7574408906064
+      ]
+    },
+    {
+      "file": "Image_20260924143750257.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.31763461232185364,
+      "rotation_vector": [
+        -0.5259340129498293,
+        0.18338471583777263,
+        2.9502001232195973
+      ],
+      "translation_vector_mm": [
+        480.7800576727139,
+        141.44215084496565,
+        1575.4657857968841
+      ]
+    },
+    {
+      "file": "Image_20260924143758418.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.3087734580039978,
+      "rotation_vector": [
+        0.49799730679063814,
+        -0.13554374527222485,
+        -3.053762506241833
+      ],
+      "translation_vector_mm": [
+        527.0833621332838,
+        240.70501707870977,
+        1567.4729382671176
+      ]
+    },
+    {
+      "file": "Image_20260924143802580.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.2897424101829529,
+      "rotation_vector": [
+        0.49970632508935886,
+        -0.1185038418409642,
+        -3.0462195234555125
+      ],
+      "translation_vector_mm": [
+        524.0713096983649,
+        222.59921289646883,
+        1570.0684378742794
+      ]
+    },
+    {
+      "file": "Image_20260924143812943.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.31149056553840637,
+      "rotation_vector": [
+        0.50896393932639,
+        -0.2199618219210882,
+        -3.0377461555189322
+      ],
+      "translation_vector_mm": [
+        537.0669755034149,
+        347.3786400274371,
+        1591.6940597335915
+      ]
+    },
+    {
+      "file": "Image_20260924143816934.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.3128255307674408,
+      "rotation_vector": [
+        0.5276558657377985,
+        -0.20952646266992417,
+        -3.0103531453669636
+      ],
+      "translation_vector_mm": [
+        521.8907921752484,
+        353.3575534409347,
+        1592.407635322815
+      ]
+    },
+    {
+      "file": "Image_20260924143823255.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.32993781566619873,
+      "rotation_vector": [
+        -0.6651722321483493,
+        0.1960840539851359,
+        3.0085188263618945
+      ],
+      "translation_vector_mm": [
+        373.7674507996886,
+        239.8095357289873,
+        1637.185696268373
+      ]
+    },
+    {
+      "file": "Image_20260924143828305.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.33066773414611816,
+      "rotation_vector": [
+        -0.67947478610125,
+        0.17934935725445292,
+        3.041597758759748
+      ],
+      "translation_vector_mm": [
+        372.35045699929776,
+        248.22254166509595,
+        1632.3540390378812
+      ]
+    },
+    {
+      "file": "Image_20260924143842870.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.3558654189109802,
+      "rotation_vector": [
+        -0.6508774017923502,
+        0.13938694304598928,
+        2.9126814787576145
+      ],
+      "translation_vector_mm": [
+        363.5797426595165,
+        64.74496494035665,
+        1621.8045417627848
+      ]
+    },
+    {
+      "file": "Image_20260924143846697.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.35261884331703186,
+      "rotation_vector": [
+        -0.6640257519773716,
+        0.15796627622632414,
+        2.9237225037808834
+      ],
+      "translation_vector_mm": [
+        354.8166329000453,
+        97.48594324809075,
+        1625.8365633677827
+      ]
+    },
+    {
+      "file": "Image_20260924143858887.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.33641400933265686,
+      "rotation_vector": [
+        -0.49834419535547475,
+        0.12310154904699677,
+        3.036431935049853
+      ],
+      "translation_vector_mm": [
+        609.4193613251581,
+        105.24245531525997,
+        1574.0837977830715
+      ]
+    },
+    {
+      "file": "Image_20260924143902851.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.32727131247520447,
+      "rotation_vector": [
+        -0.5050496583881845,
+        0.10941151220300953,
+        3.060242512602194
+      ],
+      "translation_vector_mm": [
+        610.1912505004248,
+        107.52612623335797,
+        1569.035428472867
+      ]
+    },
+    {
+      "file": "Image_20260924143916378.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.3431690037250519,
+      "rotation_vector": [
+        0.5134834558837491,
+        -0.24907249439023676,
+        -3.0286756163994615
+      ],
+      "translation_vector_mm": [
+        584.1084650300593,
+        419.8910493855985,
+        1548.520978365255
+      ]
+    },
+    {
+      "file": "Image_20260924143920830.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.388217955827713,
+      "rotation_vector": [
+        -0.7659643573032074,
+        0.23244215355928233,
+        3.031029413586907
+      ],
+      "translation_vector_mm": [
+        311.04799031468286,
+        356.60134967403695,
+        1615.7412602256488
+      ]
+    },
+    {
+      "file": "Image_20260924143924096.bmp",
+      "detection_method": "raw",
+      "mean_reprojection_error_pixels": 0.3818128705024719,
+      "rotation_vector": [
+        -0.7589974875446398,
+        0.23406973107982632,
+        3.020691482648244
+      ],
+      "translation_vector_mm": [
+        316.28244752521886,
+        343.9244154932744,
+        1614.258732760766
+      ]
+    }
+  ],
+  "rejected_images": [
+    {
+      "file": "Image_20260924143305846.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    },
+    {
+      "file": "Image_20260924143911095.bmp",
+      "reason": "9 x 6 checkerboard corners not found after enhancement"
+    }
+  ]
+}

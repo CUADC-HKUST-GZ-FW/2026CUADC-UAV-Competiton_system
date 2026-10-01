@@ -29,6 +29,8 @@ readonly RELEASE_POINT_MODE
 readonly REQUIRED_TARGETS=3
 readonly DEDUP_RADIUS_M=10.0
 readonly SETTLE_SEC=1.0
+readonly FALLBACK_COMMIT_WP_INDEX=4
+readonly SUBMISSION_DEADLINE_WP_INDEX=5
 readonly RUN_DIR="${ROOT}/run"
 readonly LOG_DIR="${ROOT}/logs/recon"
 readonly LOCK_FILE="${RUN_DIR}/competition_target_fusion.lock"
@@ -406,7 +408,7 @@ setsid bash -lc \
 flight_pid=$!
 register_child "${flight_pid}" "flight_bringup" "${RUN_DIR}/manual_flight_bringup.pid"
 
-deadline=$((SECONDS + 30))
+deadline=$((SECONDS + 90))
 while true; do
     flight_node_snapshot="$(node_list_snapshot)"
     mission_manager_count="$(
@@ -415,7 +417,9 @@ while true; do
     if ((mission_manager_count > 1)); then
         fail "duplicate /mission_manager_node instances detected count=${mission_manager_count}"
     fi
-    if [[ "${mission_manager_count}" == "1" ]]; then
+    flight_service_snapshot="$(ros2 service list --no-daemon --spin-time 3.0 2>/dev/null || true)"
+    if grep -Fqx -- /mission/disable <<<"${flight_service_snapshot}" \
+        && grep -Fqx -- /fcu/goto_global <<<"${flight_service_snapshot}"; then
         break
     fi
     if ! child_group_alive "${flight_pid}"; then
@@ -424,7 +428,7 @@ while true; do
     fi
     if ((SECONDS >= deadline)); then
         tail -40 "${FLIGHT_LOG}" >&2 || true
-        fail "mission_manager_node was not ready within 30 seconds"
+        fail "mission_manager_node was not ready within 90 seconds"
     fi
     sleep 1
 done
@@ -497,7 +501,7 @@ recon_pid=$!
 register_child "${recon_pid}" "recon_geolocator" "${RUN_DIR}/recon_ros.pid"
 
 setsid bash -lc \
-    "source '${ROS_SETUP}'; source '${WS_SETUP}'; exec python3 '${ROOT}/scripts/competition_selector.py' --mode '${MODE}' --session-root '${RESULT_DIR}' --required-targets '${REQUIRED_TARGETS}' --dedup-radius-m '${DEDUP_RADIUS_M}' --settle-sec '${SETTLE_SEC}'" \
+    "source '${ROS_SETUP}'; source '${WS_SETUP}'; exec python3 '${ROOT}/scripts/competition_selector.py' --mode '${MODE}' --session-root '${RESULT_DIR}' --required-targets '${REQUIRED_TARGETS}' --dedup-radius-m '${DEDUP_RADIUS_M}' --settle-sec '${SETTLE_SEC}' --fallback-commit-wp-index '${FALLBACK_COMMIT_WP_INDEX}' --submission-deadline-wp-index '${SUBMISSION_DEADLINE_WP_INDEX}'" \
     >"${SELECTOR_LOG}" 2>&1 </dev/null {LOCK_FD}>&- &
 selector_pid=$!
 register_child "${selector_pid}" "competition_selector" "${RUN_DIR}/competition_selector.pid"
@@ -515,7 +519,7 @@ for index in "${!CHILD_PIDS[@]}"; do
     fi
 done
 
-deadline=$((SECONDS + 30))
+deadline=$((SECONDS + 90))
 while true; do
     graph_node_snapshot="$(node_list_snapshot)"
     recon_node_count="$(
@@ -539,9 +543,9 @@ while true; do
         fail "duplicate ROS nodes detected mission_manager=${mission_manager_count} fcu_interface=${fcu_interface_count} recon=${recon_node_count} selector=${selector_node_count} bridge=${bridge_node_count}"
     fi
 
-    recon_info="$(ros2 topic info /vision/recon_result 2>/dev/null || true)"
-    selected_info="$(ros2 topic info /vision/competition_selected_target 2>/dev/null || true)"
-    target_info="$(ros2 topic info /vision/target_command 2>/dev/null || true)"
+    recon_info="$(ros2 topic info --no-daemon --spin-time 3.0 /vision/recon_result 2>/dev/null || true)"
+    selected_info="$(ros2 topic info --no-daemon --spin-time 3.0 /vision/competition_selected_target 2>/dev/null || true)"
+    target_info="$(ros2 topic info --no-daemon --spin-time 3.0 /vision/target_command 2>/dev/null || true)"
     recon_publishers="$(awk '/Publisher count:/ {print $3; exit}' <<<"${recon_info}")"
     recon_subscribers="$(awk '/Subscription count:/ {print $3; exit}' <<<"${recon_info}")"
     selected_publishers="$(awk '/Publisher count:/ {print $3; exit}' <<<"${selected_info}")"
@@ -561,7 +565,7 @@ while true; do
         fail "duplicate ROS publishers detected recon_pub=${recon_publishers} recon_sub=${recon_subscribers} selected_pub=${selected_publishers} selected_sub=${selected_subscribers} target_pub=${target_publishers} target_sub=${target_subscribers}"
     fi
 
-    service_list="$(ros2 service list 2>/dev/null || true)"
+    service_list="$(ros2 service list --no-daemon --spin-time 3.0 2>/dev/null || true)"
     for legacy_service in \
         /mission/enable \
         /mission/confirm_target; do
@@ -579,12 +583,10 @@ while true; do
         fi
     done
 
-    if [[ "${recon_node_count}" == "1" ]] \
-        && [[ "${selector_node_count}" == "1" ]] \
-        && [[ "${bridge_node_count}" == "1" ]] \
-        && [[ "${mission_manager_count}" == "1" ]] \
-        && [[ "${fcu_interface_count}" == "1" ]] \
-        && [[ "${recon_publishers}" == "1" ]] \
+    # Fast DDS can expose topics and services while a fresh `ros2 node list`
+    # snapshot is empty. Node counts still reject duplicates above; readiness
+    # is proven by the authoritative publishers, consumers and services.
+    if [[ "${recon_publishers}" == "1" ]] \
         && [[ "${selected_publishers}" == "1" ]] \
         && [[ "${selected_subscribers}" -ge 1 ]] \
         && [[ "${target_publishers}" == "1" ]] \
@@ -600,7 +602,7 @@ while true; do
     done
 
     if ((SECONDS >= deadline)); then
-        fail "competition vision-to-flight ROS graph was not ready within 30 seconds nodes=${mission_manager_count}/${fcu_interface_count}/${recon_node_count}/${selector_node_count}/${bridge_node_count} recon=${recon_publishers}/${recon_subscribers} selected=${selected_publishers}/${selected_subscribers} target=${target_publishers}/${target_subscribers} services_ready=${services_ready}"
+        fail "competition vision-to-flight ROS graph was not ready within 90 seconds nodes=${mission_manager_count}/${fcu_interface_count}/${recon_node_count}/${selector_node_count}/${bridge_node_count} recon=${recon_publishers}/${recon_subscribers} selected=${selected_publishers}/${selected_subscribers} target=${target_publishers}/${target_subscribers} services_ready=${services_ready}"
     fi
     sleep 1
 done
@@ -611,6 +613,9 @@ echo "mode=${MODE}"
 echo "heading_deg=${HEADING_DEG}"
 echo "release_point_mode=${RELEASE_POINT_MODE}"
 echo "required_nonempty_targets=${REQUIRED_TARGETS}"
+echo "partial_final_fallback=min_r95"
+echo "fallback_commit_wp_index=${FALLBACK_COMMIT_WP_INDEX}"
+echo "submission_deadline_wp_index=${SUBMISSION_DEADLINE_WP_INDEX}"
 echo "selection_rule=$([[ "${MODE}" == "digit" ]] && echo median_numeric_value || echo highest_image_value)"
 echo "session_id=${SESSION_ID}"
 echo "mavros_count=${mavros_count}"

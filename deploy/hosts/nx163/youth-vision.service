@@ -1,0 +1,23 @@
+﻿[2026-10-01 18:20:08] Reading youth-vision.service from nx163 (attempt 1/8)
+[Unit]
+Description=nx163 competition three-target digit recognition and UAV fusion chain
+After=network-online.target time-set.target
+Wants=network-online.target time-set.target
+
+[Service]
+Type=simple
+User=nx163
+Environment=HOME=/home/nx163
+Environment=UAV_FOREGROUND=1
+WorkingDirectory=/home/nx163/uav_ros2_project
+ExecStart=/home/nx163/uav_ros2_project/scripts/start_competition_target_fusion.sh digit 0 --release-point-mode fixed
+Restart=on-failure
+RestartSec=10
+KillMode=mixed
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=youth-vision
+
+[Install]
+WantedBy=multi-user.target

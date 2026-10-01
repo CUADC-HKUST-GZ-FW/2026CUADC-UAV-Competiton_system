@@ -1,0 +1,9 @@
+﻿{
+    "captured_at":  "2026-10-01T18:20:33.3147519+08:00",
+    "nx163_source_files":  224,
+    "nx164_source_files":  214,
+    "common_identical_files":  160,
+    "differing_files":  52,
+    "files_present_on_one_host":  14,
+    "canonical_host_for_recon_config":  "nx163"
+}

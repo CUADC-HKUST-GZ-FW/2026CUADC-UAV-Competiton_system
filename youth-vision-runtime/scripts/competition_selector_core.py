@@ -104,6 +104,34 @@ def quality_key(record):
     )
 
 
+def fallback_precision_key(record):
+    """Rank a partial competition result by coordinate precision first."""
+    radius = record['horizontal_radius_95_m']
+    if not math.isfinite(radius) or radius <= 0.0:
+        radius = float('inf')
+    return (
+        radius,
+        -record['observation_count'],
+        -record['label_consensus'],
+        -record['confidence'],
+        record['target_id'],
+    )
+
+
+def choose_precision_fallback(representatives, required_targets=3):
+    """Choose the most precise target when only one or two finals exist."""
+    if not 0 < len(representatives) < required_targets:
+        return None
+    candidates = sorted(representatives, key=fallback_precision_key)
+    if not math.isfinite(fallback_precision_key(candidates[0])[0]):
+        return None
+    return {
+        'selection_rule': 'fallback_minimum_r95',
+        'selected': candidates[0],
+        'candidates': candidates,
+    }
+
+
 def cluster_records(records, radius_m):
     radius_m = max(0.0, radius_m)
     groups = []

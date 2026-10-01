@@ -307,6 +307,7 @@ class VisionTargetBridge(Node):
             )
 
     def mission_state_callback(self, message):
+        previous_state = self.mission_state
         self.mission_state = str(message.data)
         if (
             self.auto_execute
@@ -318,8 +319,17 @@ class VisionTargetBridge(Node):
                 self.get_logger().info(
                     'Mission manager accepted target and entered EXECUTING'
                 )
-            elif self.mission_state == 'SAFE':
-                self.automation_failed('mission_manager_entered_SAFE')
+            elif (
+                self.mission_state in {'SAFE', 'WAIT_FCU'}
+                and self.mission_state != previous_state
+            ):
+                self.get_logger().warning(
+                    'Mission manager temporarily unavailable; finalized target '
+                    'retained for retry '
+                    f'state={self.mission_state} '
+                    f'attempts={self.target_publish_attempts} '
+                    f'deadline_seq={self.submission_deadline_wp_index}'
+                )
         self.publish_if_ready()
 
     def phase_timed_out(self, now):
@@ -358,24 +368,8 @@ class VisionTargetBridge(Node):
             )
             return
 
-        if self.total_timed_out(now):
-            self.automation_failed(
-                f'total_timeout phase={self.automation_phase}'
-            )
-            return
-        if self.mission_state == 'SAFE':
-            self.automation_failed('mission_manager_entered_SAFE')
-            return
-
         if self.automation_phase == 'waiting_for_standby':
             self.publish_if_ready()
-            if (
-                self.automation_phase == 'waiting_for_standby'
-                and self.phase_timed_out(now)
-            ):
-                self.automation_failed(
-                    f'STANDBY_timeout state={self.mission_state}'
-                )
             return
 
         if self.automation_phase == 'waiting_for_manager_ack':

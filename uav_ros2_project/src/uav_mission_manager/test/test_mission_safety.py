@@ -338,6 +338,43 @@ class MissionSafetyTest(unittest.TestCase):
         self.assertEqual(MissionState.SAFE, self.node.state)
         self.assertEqual('CRITICAL', self.node.runtime_health_level.value)
 
+    def test_runtime_health_sampling_does_not_create_subscriptions(self):
+        self.make_standby_healthy()
+        self.node.create_subscription = Mock()
+
+        self.node.health_timer_callback()
+
+        self.node.create_subscription.assert_not_called()
+
+    def test_dynamic_mission_failure_for_active_task_enters_safe(self):
+        self.make_standby_healthy()
+        self.node.state = MissionState.EXECUTING
+        self.node.active_target = {'id': 'target-42'}
+        event = String()
+        event.data = (
+            '{"event":"dynamic_mission_failed","task_id":"target-42",'
+            '"reason":"mission_state_unknown"}'
+        )
+
+        self.node.dynamic_mission_failure_callback(event)
+
+        self.assertEqual(MissionState.SAFE, self.node.state)
+        self.assertIn('mission_state_unknown', self.node.safe_reason)
+
+    def test_dynamic_mission_failure_ignores_other_task(self):
+        self.make_standby_healthy()
+        self.node.state = MissionState.EXECUTING
+        self.node.active_target = {'id': 'target-42'}
+        event = String()
+        event.data = (
+            '{"event":"dynamic_mission_failed","task_id":"target-99",'
+            '"reason":"mission_state_unknown"}'
+        )
+
+        self.node.dynamic_mission_failure_callback(event)
+
+        self.assertEqual(MissionState.EXECUTING, self.node.state)
+
     def test_standby_link_stale_returns_to_wait_fcu(self):
         self.make_standby_healthy()
         self.node.last_fcu_state_time = (

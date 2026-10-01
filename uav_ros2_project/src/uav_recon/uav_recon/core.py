@@ -559,6 +559,11 @@ class FramePacket:
     last_timestamp: float = 0.0
     last_center_px: Sequence[float] = field(default_factory=lambda: (0.0, 0.0))
     last_frame_number: int = -1
+    source_packet_ids: List[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        if not self.source_packet_ids:
+            self.source_packet_ids = [self.packet_id]
 
     def add(self, observation: Observation):
         self.observations.append(observation)
@@ -659,8 +664,8 @@ class FramePacket:
                 - min(observation.timestamp for observation in self.observations)
             ),
         })
-        fused['packet_ids'] = [self.packet_id]
-        fused['packet_count'] = 1
+        fused['packet_ids'] = list(self.source_packet_ids)
+        fused['packet_count'] = len(self.source_packet_ids)
         return fused
 
 
@@ -706,6 +711,394 @@ class PixelFramePacketManager:
             self.pixel_gate_base_px
             + self.pixel_gate_rate_px_per_sec * max(0.0, float(delta_sec)),
         )
+
+    @staticmethod
+    def _packet_pixel_velocity(packet: FramePacket, from_end: bool):
+        observations = sorted(
+            packet.observations,
+            key=lambda item: (item.timestamp, item.frame_number),
+        )
+        observations = observations[-5:] if from_end else observations[:5]
+        if len(observations) < 2:
+            return None
+
+        timestamps = [float(item.timestamp) for item in observations]
+        mean_timestamp = statistics.fmean(timestamps)
+        denominator = sum((timestamp - mean_timestamp) ** 2 for timestamp in timestamps)
+        if denominator <= 1e-12:
+            return None
+
+        mean_x = statistics.fmean(float(item.center_px[0]) for item in observations)
+        mean_y = statistics.fmean(float(item.center_px[1]) for item in observations)
+        velocity_x = sum(
+            (item.timestamp - mean_timestamp) * (float(item.center_px[0]) - mean_x)
+            for item in observations
+        ) / denominator
+        velocity_y = sum(
+            (item.timestamp - mean_timestamp) * (float(item.center_px[1]) - mean_y)
+            for item in observations
+        ) / denominator
+        return velocity_x, velocity_y
+
+    @classmethod
+    def _packet_prediction_residual(cls, left: FramePacket, right: FramePacket):
+        left_observations = sorted(
+            left.observations,
+            key=lambda item: (item.timestamp, item.frame_number),
+        )
+        right_observations = sorted(
+            right.observations,
+            key=lambda item: (item.timestamp, item.frame_number),
+        )
+        if not left_observations or not right_observations:
+            return None
+
+        left_last = left_observations[-1]
+        right_first = right_observations[0]
+        gap_sec = float(right_first.timestamp) - float(left_last.timestamp)
+        residuals = []
+
+        left_velocity = cls._packet_pixel_velocity(left, from_end=True)
+        if left_velocity is not None:
+            predicted_x = float(left_last.center_px[0]) + left_velocity[0] * gap_sec
+            predicted_y = float(left_last.center_px[1]) + left_velocity[1] * gap_sec
+            residuals.append((
+                math.hypot(
+                    float(right_first.center_px[0]) - predicted_x,
+                    float(right_first.center_px[1]) - predicted_y,
+                ),
+                'forward',
+            ))
+
+        right_velocity = cls._packet_pixel_velocity(right, from_end=False)
+        if right_velocity is not None:
+            predicted_x = float(right_first.center_px[0]) - right_velocity[0] * gap_sec
+            predicted_y = float(right_first.center_px[1]) - right_velocity[1] * gap_sec
+            residuals.append((
+                math.hypot(
+                    float(left_last.center_px[0]) - predicted_x,
+                    float(left_last.center_px[1]) - predicted_y,
+                ),
+                'backward',
+            ))
+
+        return min(residuals, default=None, key=lambda item: item[0])
+
+    @staticmethod
+    def _combined_ground_diameter_m(left: FramePacket, right: FramePacket):
+        left_points = left.geolocated_observations()
+        right_points = right.geolocated_observations()
+        if not left_points or not right_points:
+            return None
+
+        points = left_points + right_points
+        maximum = 0.0
+        for index, first in enumerate(points):
+            for second in points[index + 1:]:
+                east, north = geodetic_delta_m(
+                    first.latitude,
+                    first.longitude,
+                    second.latitude,
+                    second.longitude,
+                )
+                maximum = max(maximum, math.hypot(east, north))
+        return maximum
+
+    @staticmethod
+    def _merge_frame_packets(left: FramePacket, right: FramePacket):
+        observations = sorted(
+            left.observations + right.observations,
+            key=lambda item: (item.timestamp, item.frame_number),
+        )
+        labels = {str(item.label) for item in observations}
+        merged = FramePacket(
+            packet_id=left.packet_id,
+            label=next(iter(labels)) if len(labels) == 1 else 'mixed',
+            source_packet_ids=(
+                list(left.source_packet_ids) + list(right.source_packet_ids)
+            ),
+        )
+        for observation in observations:
+            merged.add(observation)
+        return merged
+
+    def reassemble_short_packets(
+        self,
+        packets: Sequence[FramePacket],
+        minimum_observations: int,
+        max_gap_sec: float = 0.20,
+        prediction_gate_ratio: float = 0.45,
+        max_ground_diameter_m: float = 2.0,
+    ):
+        """Merge compatible short packets before applying the frame minimum."""
+        minimum = max(1, int(minimum_observations))
+        maximum_gap = max(0.0, float(max_gap_sec))
+        gate_ratio = max(0.0, float(prediction_gate_ratio))
+        ground_limit = max(0.0, float(max_ground_diameter_m))
+        working = sorted(
+            list(packets),
+            key=lambda packet: (
+                min(item.timestamp for item in packet.observations),
+                packet.packet_id,
+            ),
+        )
+        eligible_packet_ids = {
+            packet.packet_id
+            for packet in working
+            if len(packet.observations) < minimum
+        }
+        decisions = []
+
+        while True:
+            candidates = []
+            for left_index, left in enumerate(working):
+                if not set(left.source_packet_ids).issubset(eligible_packet_ids):
+                    continue
+                left_last = max(item.timestamp for item in left.observations)
+                for right_index in range(left_index + 1, len(working)):
+                    right = working[right_index]
+                    if not set(right.source_packet_ids).issubset(eligible_packet_ids):
+                        continue
+                    right_first = min(item.timestamp for item in right.observations)
+                    gap_sec = float(right_first) - float(left_last)
+                    if gap_sec <= 0.0 or gap_sec > maximum_gap:
+                        continue
+
+                    prediction = self._packet_prediction_residual(left, right)
+                    if prediction is None:
+                        continue
+                    prediction_residual_px, prediction_direction = prediction
+                    gate_px = self.pixel_gate(gap_sec)
+                    residual_limit_px = gate_ratio * gate_px
+                    if prediction_residual_px > residual_limit_px:
+                        continue
+
+                    ground_diameter_m = self._combined_ground_diameter_m(left, right)
+                    if (
+                        ground_diameter_m is None
+                        or ground_diameter_m > ground_limit
+                    ):
+                        continue
+
+                    candidates.append((
+                        prediction_residual_px / max(residual_limit_px, 1e-9),
+                        ground_diameter_m / max(ground_limit, 1e-9),
+                        gap_sec,
+                        left_index,
+                        right_index,
+                        gate_px,
+                        residual_limit_px,
+                        prediction_residual_px,
+                        prediction_direction,
+                        ground_diameter_m,
+                    ))
+
+            if not candidates:
+                break
+
+            (
+                _,
+                _,
+                gap_sec,
+                left_index,
+                right_index,
+                gate_px,
+                residual_limit_px,
+                prediction_residual_px,
+                prediction_direction,
+                ground_diameter_m,
+            ) = min(candidates)
+            left = working[left_index]
+            right = working[right_index]
+            merged = self._merge_frame_packets(left, right)
+            decisions.append({
+                'action': 'premerge_short_packets',
+                'packet_ids': list(merged.source_packet_ids),
+                'frame_count': len(merged.observations),
+                'gap_sec': gap_sec,
+                'prediction_direction': prediction_direction,
+                'prediction_residual_px': prediction_residual_px,
+                'prediction_gate_px': gate_px,
+                'prediction_residual_limit_px': residual_limit_px,
+                'ground_diameter_m': ground_diameter_m,
+            })
+            working = [
+                packet
+                for index, packet in enumerate(working)
+                if index not in (left_index, right_index)
+            ]
+            working.append(merged)
+            working.sort(key=lambda packet: (
+                min(item.timestamp for item in packet.observations),
+                packet.packet_id,
+            ))
+
+        return working, decisions
+
+    @staticmethod
+    def _direction_cosine(first, second):
+        first_norm = math.hypot(float(first[0]), float(first[1]))
+        second_norm = math.hypot(float(second[0]), float(second[1]))
+        if first_norm <= 1e-9 or second_norm <= 1e-9:
+            return None
+        return (
+            float(first[0]) * float(second[0])
+            + float(first[1]) * float(second[1])
+        ) / (first_norm * second_norm)
+
+    @classmethod
+    def _packet_bridge_motion(cls, left: FramePacket, right: FramePacket):
+        left_observations = sorted(
+            left.observations,
+            key=lambda item: (item.timestamp, item.frame_number),
+        )
+        right_observations = sorted(
+            right.observations,
+            key=lambda item: (item.timestamp, item.frame_number),
+        )
+        if not left_observations or not right_observations:
+            return None
+
+        left_last = left_observations[-1]
+        right_first = right_observations[0]
+        gap_sec = float(right_first.timestamp) - float(left_last.timestamp)
+        if gap_sec <= 0.0:
+            return None
+
+        displacement = (
+            float(right_first.center_px[0]) - float(left_last.center_px[0]),
+            float(right_first.center_px[1]) - float(left_last.center_px[1]),
+        )
+        distance_px = math.hypot(*displacement)
+        if distance_px <= 1e-9:
+            return None
+
+        left_velocity = cls._packet_pixel_velocity(left, from_end=True)
+        right_velocity = cls._packet_pixel_velocity(right, from_end=False)
+        if left_velocity is None or right_velocity is None:
+            return None
+
+        left_cosine = cls._direction_cosine(displacement, left_velocity)
+        right_cosine = cls._direction_cosine(displacement, right_velocity)
+        if left_cosine is None or right_cosine is None:
+            return None
+        return {
+            'gap_sec': gap_sec,
+            'distance_px': distance_px,
+            'speed_px_per_sec': distance_px / gap_sec,
+            'left_direction_cosine': left_cosine,
+            'right_direction_cosine': right_cosine,
+            'minimum_direction_cosine': min(left_cosine, right_cosine),
+        }
+
+    def bridge_short_packet_gaps(
+        self,
+        packets: Sequence[FramePacket],
+        minimum_observations: int,
+        max_gap_sec: float = 0.85,
+        minimum_fragment_observations: int = 3,
+        minimum_direction_cosine: float = 0.75,
+        max_speed_px_per_sec: float = 1800.0,
+        max_ground_diameter_m: float = 2.0,
+    ):
+        """Join detector-dropout fragments without inventing observations.
+
+        This is deliberately stricter than ordinary packet premerge. Both
+        fragments need a measurable trajectory, their motion direction must
+        agree across the dropout, and every valid ground point must describe
+        the same compact target. A packet that has already reached the normal
+        frame minimum is never changed here.
+        """
+        minimum = max(1, int(minimum_observations))
+        fragment_minimum = max(2, int(minimum_fragment_observations))
+        maximum_gap = max(0.0, float(max_gap_sec))
+        cosine_limit = max(-1.0, min(1.0, float(minimum_direction_cosine)))
+        speed_limit = max(0.0, float(max_speed_px_per_sec))
+        ground_limit = max(0.0, float(max_ground_diameter_m))
+        working = sorted(
+            list(packets),
+            key=lambda packet: (
+                min(item.timestamp for item in packet.observations),
+                packet.packet_id,
+            ),
+        )
+        decisions = []
+
+        while True:
+            candidates = []
+            for left_index, left in enumerate(working):
+                if (
+                    len(left.observations) < fragment_minimum
+                    or len(left.observations) >= minimum
+                ):
+                    continue
+                for right_index in range(left_index + 1, len(working)):
+                    right = working[right_index]
+                    if (
+                        len(right.observations) < fragment_minimum
+                        or len(right.observations) >= minimum
+                    ):
+                        continue
+
+                    motion = self._packet_bridge_motion(left, right)
+                    if motion is None or motion['gap_sec'] > maximum_gap:
+                        continue
+                    if motion['minimum_direction_cosine'] < cosine_limit:
+                        continue
+                    if motion['speed_px_per_sec'] > speed_limit:
+                        continue
+
+                    ground_diameter_m = self._combined_ground_diameter_m(left, right)
+                    if (
+                        ground_diameter_m is None
+                        or ground_diameter_m > ground_limit
+                    ):
+                        continue
+
+                    candidates.append((
+                        ground_diameter_m / max(ground_limit, 1e-9),
+                        1.0 - motion['minimum_direction_cosine'],
+                        motion['gap_sec'],
+                        left_index,
+                        right_index,
+                        motion,
+                        ground_diameter_m,
+                    ))
+
+            if not candidates:
+                break
+
+            (
+                _,
+                _,
+                _,
+                left_index,
+                right_index,
+                motion,
+                ground_diameter_m,
+            ) = min(candidates)
+            left = working[left_index]
+            right = working[right_index]
+            merged = self._merge_frame_packets(left, right)
+            decisions.append({
+                'action': 'bridge_detector_gap',
+                'packet_ids': list(merged.source_packet_ids),
+                'frame_count': len(merged.observations),
+                **motion,
+                'ground_diameter_m': ground_diameter_m,
+            })
+            working = [
+                packet
+                for index, packet in enumerate(working)
+                if index not in (left_index, right_index)
+            ]
+            working.append(merged)
+            working.sort(key=lambda packet: (
+                min(item.timestamp for item in packet.observations),
+                packet.packet_id,
+            ))
+
+        return working, decisions
 
     @staticmethod
     def _pixel_distance(observation: Observation, packet: FramePacket) -> float:
@@ -920,6 +1313,75 @@ class PixelFramePacketManager:
     @property
     def active_packet_count(self) -> int:
         return len(self.active)
+
+    @property
+    def pending_packet_count(self) -> int:
+        return len(self.pending)
+
+
+class ShortPacketGapBridgeBuffer:
+    """Retain only sub-threshold packets long enough to bridge detector holes."""
+
+    def __init__(
+        self,
+        manager: PixelFramePacketManager,
+        minimum_observations: int,
+        max_gap_sec: float = 0.85,
+        retention_sec: float = 1.20,
+        minimum_fragment_observations: int = 3,
+        minimum_direction_cosine: float = 0.75,
+        max_speed_px_per_sec: float = 1800.0,
+        max_ground_diameter_m: float = 2.0,
+    ):
+        self.manager = manager
+        self.minimum_observations = max(1, int(minimum_observations))
+        self.max_gap_sec = max(0.0, float(max_gap_sec))
+        self.retention_sec = max(self.max_gap_sec, float(retention_sec))
+        self.minimum_fragment_observations = max(
+            2,
+            int(minimum_fragment_observations),
+        )
+        self.minimum_direction_cosine = max(
+            -1.0,
+            min(1.0, float(minimum_direction_cosine)),
+        )
+        self.max_speed_px_per_sec = max(0.0, float(max_speed_px_per_sec))
+        self.max_ground_diameter_m = max(0.0, float(max_ground_diameter_m))
+        self.pending: List[FramePacket] = []
+
+    def offer(self, packets: Sequence[FramePacket], reference_timestamp: float):
+        working, decisions = self.manager.bridge_short_packet_gaps(
+            self.pending + list(packets),
+            self.minimum_observations,
+            self.max_gap_sec,
+            self.minimum_fragment_observations,
+            self.minimum_direction_cosine,
+            self.max_speed_px_per_sec,
+            self.max_ground_diameter_m,
+        )
+        ready = []
+        retained = []
+        expired = []
+        for packet in working:
+            if len(packet.observations) >= self.minimum_observations:
+                ready.append(packet)
+            elif float(reference_timestamp) - packet.last_timestamp > self.retention_sec:
+                expired.append(packet)
+            else:
+                retained.append(packet)
+        self.pending = retained
+        return ready, expired, decisions
+
+    def expire(self, reference_timestamp: float):
+        retained = []
+        expired = []
+        for packet in self.pending:
+            if float(reference_timestamp) - packet.last_timestamp > self.retention_sec:
+                expired.append(packet)
+            else:
+                retained.append(packet)
+        self.pending = retained
+        return expired
 
     @property
     def pending_packet_count(self) -> int:

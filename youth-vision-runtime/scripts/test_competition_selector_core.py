@@ -1,5 +1,6 @@
 from competition_selector_core import (
     choose_competition_target,
+    choose_precision_fallback,
     cluster_records,
     distance_m,
     normalize_record,
@@ -13,6 +14,7 @@ def record(
     latitude,
     observations=10,
     confidence=0.98,
+    radius_m=0.3,
     status='finalized',
 ):
     return normalize_record({
@@ -27,7 +29,7 @@ def record(
             'latitude': latitude,
             'longitude': 113.0,
             'altitude_msl_m': 35.0,
-            'horizontal_radius_95_m': 0.3,
+            'horizontal_radius_95_m': radius_m,
         },
         'observation_count': observations,
         'rtk_fixed': True,
@@ -132,6 +134,74 @@ def test_two_nonempty_targets_do_not_finalize():
     )
     assert decision is None
     assert len(representatives) == 2
+
+
+def test_one_final_falls_back_to_only_target():
+    _, representatives, _ = choose_competition_target(
+        [record('target_001', '25', 22.0000, radius_m=0.8)],
+        'digit',
+    )
+    decision = choose_precision_fallback(representatives)
+    assert decision['selection_rule'] == 'fallback_minimum_r95'
+    assert decision['selected']['target_id'] == 'target_001'
+
+
+def test_two_finals_fallback_uses_smallest_r95_before_frame_count():
+    _, representatives, _ = choose_competition_target(
+        [
+            record(
+                'many_frames',
+                '25',
+                22.0000,
+                observations=80,
+                confidence=0.99,
+                radius_m=1.4,
+            ),
+            record(
+                'precise',
+                '52',
+                22.0002,
+                observations=8,
+                confidence=0.80,
+                radius_m=0.4,
+            ),
+        ],
+        'digit',
+    )
+    decision = choose_precision_fallback(representatives)
+    assert decision['selected']['target_id'] == 'precise'
+    assert [item['target_id'] for item in decision['candidates']] == [
+        'precise',
+        'many_frames',
+    ]
+
+
+def test_zero_finals_has_no_fallback():
+    assert choose_precision_fallback([]) is None
+
+
+def test_three_finals_never_use_fallback():
+    _, representatives, _ = choose_competition_target(
+        [
+            record('target_001', '25', 22.0000),
+            record('target_002', '52', 22.0002),
+            record('target_003', '69', 22.0004),
+        ],
+        'digit',
+    )
+    assert choose_precision_fallback(representatives) is None
+
+
+def test_invalid_fallback_radius_is_not_treated_as_perfect():
+    _, representatives, _ = choose_competition_target(
+        [
+            record('invalid_radius', '25', 22.0000, radius_m=0.0),
+            record('valid_radius', '52', 22.0002, radius_m=0.7),
+        ],
+        'digit',
+    )
+    decision = choose_precision_fallback(representatives)
+    assert decision['selected']['target_id'] == 'valid_radius'
 
 
 def test_finalized_packet_results_are_eligible():

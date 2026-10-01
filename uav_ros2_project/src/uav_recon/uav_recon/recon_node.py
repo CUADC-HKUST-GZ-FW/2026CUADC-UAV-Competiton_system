@@ -24,6 +24,7 @@ from .core import (
     CameraModel,
     Observation,
     PixelFramePacketManager,
+    ShortPacketGapBridgeBuffer,
     TimedBuffer,
     TrackManager,
     geodetic_delta_m,
@@ -102,6 +103,32 @@ class ReconGeolocatorNode(Node):
             float(self.get_parameter('packet_pixel_gate_max_px').value),
             int(self.get_parameter('packet_max_observations').value),
             float(self.get_parameter('packet_association_gap_sec').value),
+        )
+        self.short_packet_bridge = ShortPacketGapBridgeBuffer(
+            self.frame_packets,
+            int(self.get_parameter('packet_min_observations').value),
+            float(self.get_parameter('packet_gap_bridge_max_gap_sec').value),
+            float(self.get_parameter('packet_gap_bridge_retention_sec').value),
+            int(
+                self.get_parameter(
+                    'packet_gap_bridge_min_fragment_observations'
+                ).value
+            ),
+            float(
+                self.get_parameter(
+                    'packet_gap_bridge_min_direction_cosine'
+                ).value
+            ),
+            float(
+                self.get_parameter(
+                    'packet_gap_bridge_max_speed_px_per_sec'
+                ).value
+            ),
+            float(
+                self.get_parameter(
+                    'packet_gap_bridge_max_ground_diameter_m'
+                ).value
+            ),
         )
         self.final_target_count = 0
         self.packet_snapshot_scores = {}
@@ -237,7 +264,16 @@ class ReconGeolocatorNode(Node):
             'packet_pixel_gate_rate_px_per_sec': 1500.0,
             'packet_pixel_gate_max_px': 220.0,
             'packet_max_observations': 300,
-            'packet_min_observations': 11,
+            'packet_min_observations': 8,
+            'packet_premerge_max_gap_sec': 0.20,
+            'packet_premerge_prediction_gate_ratio': 0.45,
+            'packet_premerge_max_ground_diameter_m': 2.0,
+            'packet_gap_bridge_max_gap_sec': 0.85,
+            'packet_gap_bridge_retention_sec': 1.20,
+            'packet_gap_bridge_min_fragment_observations': 3,
+            'packet_gap_bridge_min_direction_cosine': 0.75,
+            'packet_gap_bridge_max_speed_px_per_sec': 1800.0,
+            'packet_gap_bridge_max_ground_diameter_m': 2.0,
             'packet_merge_distance_m': 1.5,
             'packet_distinct_distance_m': 10.0,
             'association_radius_m': 3.0,
@@ -457,6 +493,8 @@ class ReconGeolocatorNode(Node):
             if packet_time is not None:
                 self._queue_packet_groups(self.frame_packets.advance(packet_time))
             self._finalize_ready_packet_groups()
+            if packet_time is not None:
+                self._expire_dormant_short_packets(packet_time)
 
     def _read_recognition_event_manifests(self):
         path = self.recognition_event_log_path
@@ -1019,23 +1057,93 @@ class ReconGeolocatorNode(Node):
         observation.crop_path = str(crop_destination)
         self.packet_snapshot_scores[packet_id] = score
 
+    def _cleanup_packet_snapshots(self, packets):
+        packet_ids = {
+            packet_id
+            for packet in packets
+            for packet_id in packet.source_packet_ids
+        }
+        for packet_id in packet_ids:
+            self.packet_snapshot_scores.pop(packet_id, None)
+            shutil.rmtree(
+                self.output_root / '.frame_packets' / packet_id,
+                ignore_errors=True,
+            )
+
+    def _expire_dormant_short_packets(self, timestamp):
+        expired = self.short_packet_bridge.expire(timestamp)
+        if not expired:
+            return
+        detail = [
+            {
+                'packet_ids': list(packet.source_packet_ids),
+                'frame_count': len(packet.observations),
+                'age_sec': float(timestamp) - packet.last_timestamp,
+            }
+            for packet in expired
+        ]
+        self.get_logger().info(
+            '[RECON_PACKET] stage=gap_bridge_expired '
+            f'packets={json.dumps(detail, ensure_ascii=False)}'
+        )
+        self._cleanup_packet_snapshots(expired)
+
     def _finalize_packet_groups(self, groups):
         for group in groups:
             minimum = max(
                 1,
                 int(self.get_parameter('packet_min_observations').value),
             )
+            original_packets = list(group.packets)
+            reassembled_packets, premerge_decisions = self.frame_packets.reassemble_short_packets(
+                original_packets,
+                minimum,
+                float(self.get_parameter('packet_premerge_max_gap_sec').value),
+                float(
+                    self.get_parameter(
+                        'packet_premerge_prediction_gate_ratio'
+                    ).value
+                ),
+                float(
+                    self.get_parameter(
+                        'packet_premerge_max_ground_diameter_m'
+                    ).value
+                ),
+            )
+            ready_packets = [
+                packet
+                for packet in reassembled_packets
+                if len(packet.observations) >= minimum
+            ]
+            short_packets = [
+                packet
+                for packet in reassembled_packets
+                if len(packet.observations) < minimum
+            ]
+            reference_timestamp = max(
+                observation.timestamp
+                for packet in original_packets
+                for observation in packet.observations
+            )
+            bridge_ready, bridge_expired, bridge_decisions = (
+                self.short_packet_bridge.offer(
+                    short_packets,
+                    reference_timestamp,
+                )
+            )
+            packets = ready_packets + bridge_ready
             candidates = []
-            rejected = []
-            for packet in group.packets:
+            rejected = [
+                {
+                    'packet_id': packet.packet_id,
+                    'packet_ids': list(packet.source_packet_ids),
+                    'reason': 'gap_bridge_expired_insufficient_frames',
+                    'frame_count': len(packet.observations),
+                }
+                for packet in bridge_expired
+            ]
+            for packet in packets:
                 raw_count = len(packet.observations)
-                if raw_count < minimum:
-                    rejected.append({
-                        'packet_id': packet.packet_id,
-                        'reason': 'insufficient_frames',
-                        'frame_count': raw_count,
-                    })
-                    continue
                 geolocated_count = len(packet.geolocated_observations())
                 if geolocated_count < minimum:
                     rejected.append({
@@ -1068,9 +1176,13 @@ class ReconGeolocatorNode(Node):
             self.get_logger().info(
                 '[RECON_PACKET] stage=group_finalized '
                 f'label={group.label} closure={group.closure_reason} '
-                f'packets={len(group.packets)} '
+                f'packets={len(original_packets)} '
+                f'reassembled={len(reassembled_packets)} '
                 f'candidates={len(candidates)} winners={len(winners)} '
+                f'bridge_pending={self.short_packet_bridge.pending_packet_count} '
                 f'rejected={json.dumps(rejected, ensure_ascii=False)} '
+                f'premerge={json.dumps(premerge_decisions, ensure_ascii=False)} '
+                f'gap_bridge={json.dumps(bridge_decisions, ensure_ascii=False)} '
                 f'decisions={json.dumps(decisions, ensure_ascii=False)}'
             )
             for fused in winners:
@@ -1114,6 +1226,47 @@ class ReconGeolocatorNode(Node):
                     'max_observations': int(
                         self.get_parameter('packet_max_observations').value
                     ),
+                    'premerge_max_gap_sec': float(
+                        self.get_parameter('packet_premerge_max_gap_sec').value
+                    ),
+                    'premerge_prediction_gate_ratio': float(
+                        self.get_parameter(
+                            'packet_premerge_prediction_gate_ratio'
+                        ).value
+                    ),
+                    'premerge_max_ground_diameter_m': float(
+                        self.get_parameter(
+                            'packet_premerge_max_ground_diameter_m'
+                        ).value
+                    ),
+                    'premerge_decisions': premerge_decisions,
+                    'gap_bridge_max_gap_sec': float(
+                        self.get_parameter('packet_gap_bridge_max_gap_sec').value
+                    ),
+                    'gap_bridge_retention_sec': float(
+                        self.get_parameter('packet_gap_bridge_retention_sec').value
+                    ),
+                    'gap_bridge_min_fragment_observations': int(
+                        self.get_parameter(
+                            'packet_gap_bridge_min_fragment_observations'
+                        ).value
+                    ),
+                    'gap_bridge_min_direction_cosine': float(
+                        self.get_parameter(
+                            'packet_gap_bridge_min_direction_cosine'
+                        ).value
+                    ),
+                    'gap_bridge_max_speed_px_per_sec': float(
+                        self.get_parameter(
+                            'packet_gap_bridge_max_speed_px_per_sec'
+                        ).value
+                    ),
+                    'gap_bridge_max_ground_diameter_m': float(
+                        self.get_parameter(
+                            'packet_gap_bridge_max_ground_diameter_m'
+                        ).value
+                    ),
+                    'gap_bridge_decisions': bridge_decisions,
                     'closure_reason': group.closure_reason,
                     'merge_distance_m': float(
                         self.get_parameter('packet_merge_distance_m').value
@@ -1141,12 +1294,7 @@ class ReconGeolocatorNode(Node):
                     f'lon={fused["longitude"]:.8f}'
                 )
 
-            for packet in group.packets:
-                self.packet_snapshot_scores.pop(packet.packet_id, None)
-                shutil.rmtree(
-                    self.output_root / '.frame_packets' / packet.packet_id,
-                    ignore_errors=True,
-                )
+            self._cleanup_packet_snapshots(packets + bridge_expired)
 
     def _write_track(self, track):
         fused = track.fuse(

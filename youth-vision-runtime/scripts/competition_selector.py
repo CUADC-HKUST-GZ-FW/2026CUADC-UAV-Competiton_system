@@ -10,13 +10,23 @@ from pathlib import Path
 import time
 
 import rclpy
+from mavros_msgs.msg import WaypointList
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import (
+    DurabilityPolicy,
+    HistoryPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+)
 
 from uav_interfaces.msg import ReconTarget
 
-from competition_selector_core import choose_competition_target, normalize_record
+from competition_selector_core import (
+    choose_competition_target,
+    choose_precision_fallback,
+    normalize_record,
+)
 
 
 def read_json(path):
@@ -44,8 +54,22 @@ class CompetitionSelector(Node):
         self.dedup_radius_m = args.dedup_radius_m
         self.settle_sec = args.settle_sec
         self.allow_confirmed = args.allow_confirmed
+        self.fallback_commit_wp_index = int(
+            getattr(args, 'fallback_commit_wp_index', 4)
+        )
+        self.submission_deadline_wp_index = int(
+            getattr(args, 'submission_deadline_wp_index', 5)
+        )
+        if self.fallback_commit_wp_index < 0:
+            raise ValueError('fallback commit waypoint must be non-negative')
+        if self.submission_deadline_wp_index <= self.fallback_commit_wp_index:
+            raise ValueError(
+                'submission deadline waypoint must be after fallback commit waypoint'
+            )
         self.output_path = self.session_root / 'competition_selected.json'
         self.selection = None
+        self.selection_closed = False
+        self.current_mission_seq = None
         self.message = None
         self.last_signature = None
         self.last_suppression_signature = None
@@ -61,6 +85,18 @@ class CompetitionSelector(Node):
             '/vision/competition_selected_target',
             qos,
         )
+        mission_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        self.mission_waypoints_subscription = self.create_subscription(
+            WaypointList,
+            '/mavros/mission/waypoints',
+            self.mission_waypoints_callback,
+            mission_qos,
+        )
         self.timer = self.create_timer(args.poll_period_sec, self.tick)
         self.get_logger().info(
             'Competition selector started '
@@ -69,7 +105,48 @@ class CompetitionSelector(Node):
             f'distinct_target_distance_m={self.dedup_radius_m:.2f} '
             f'accepted_statuses='
             f'{"finalized,confirmed" if self.allow_confirmed else "finalized"} '
+            f'fallback_commit_wp_index={self.fallback_commit_wp_index} '
+            f'submission_deadline_wp_index='
+            f'{self.submission_deadline_wp_index} '
             'flight_command_output=disabled'
+        )
+
+    def mission_waypoints_callback(self, message):
+        previous = self.current_mission_seq
+        self.current_mission_seq = int(message.current_seq)
+        if previous != self.current_mission_seq:
+            self.get_logger().info(
+                'Competition mission sequence updated '
+                f'previous_seq={previous} current_seq={self.current_mission_seq} '
+                f'fallback_commit_wp_index={self.fallback_commit_wp_index} '
+                f'submission_deadline_wp_index='
+                f'{self.submission_deadline_wp_index}'
+            )
+
+    def fallback_window_open(self):
+        return (
+            self.current_mission_seq is not None
+            and self.fallback_commit_wp_index
+            <= self.current_mission_seq
+            < self.submission_deadline_wp_index
+        )
+
+    def submission_window_closed(self):
+        return (
+            self.current_mission_seq is not None
+            and self.current_mission_seq >= self.submission_deadline_wp_index
+        )
+
+    def close_without_selection(self, representatives):
+        if self.selection_closed:
+            return
+        self.selection_closed = True
+        self.get_logger().warning(
+            'Competition selection closed; base mission preserved '
+            f'current_seq={self.current_mission_seq} '
+            f'eligible_final_count={len(representatives)} '
+            f'deadline_seq={self.submission_deadline_wp_index} '
+            'target_published=false'
         )
 
     def load_records(self):
@@ -204,6 +281,8 @@ class CompetitionSelector(Node):
         if self.selection is not None:
             self.publish_selected()
             return
+        if self.selection_closed:
+            return
 
         decision, representatives, ignored = choose_competition_target(
             self.load_records(),
@@ -254,9 +333,31 @@ class CompetitionSelector(Node):
                     f'kept={record.get("_suppressed_by_target_id", "-")} '
                     f'distance_m={record.get("_distance_m", float("nan")):.3f}'
                 )
+        if self.submission_window_closed():
+            self.close_without_selection(representatives)
+            return
+        fallback_committed = False
+        if decision is None and self.fallback_window_open():
+            decision = choose_precision_fallback(
+                representatives,
+                self.required_targets,
+            )
+            if decision is not None:
+                fallback_committed = True
+                selected = decision['selected']
+                self.get_logger().info(
+                    'Competition partial-final fallback ready '
+                    f'current_seq={self.current_mission_seq} '
+                    f'candidate_count={len(decision["candidates"])} '
+                    f'target_id={selected["target_id"]} '
+                    f'r95_m={selected["horizontal_radius_95_m"]:.3f}'
+                )
         if decision is None:
             return
-        if time.monotonic() - self.signature_since < self.settle_sec:
+        if (
+            not fallback_committed
+            and time.monotonic() - self.signature_since < self.settle_sec
+        ):
             return
         self.finalize(decision, representatives, ignored)
         self.publish_selected()
@@ -269,6 +370,8 @@ def parse_args():
     parser.add_argument('--required-targets', type=int, default=3)
     parser.add_argument('--dedup-radius-m', type=float, default=10.0)
     parser.add_argument('--settle-sec', type=float, default=1.0)
+    parser.add_argument('--fallback-commit-wp-index', type=int, default=4)
+    parser.add_argument('--submission-deadline-wp-index', type=int, default=5)
     parser.add_argument(
         '--allow-confirmed',
         action='store_true',

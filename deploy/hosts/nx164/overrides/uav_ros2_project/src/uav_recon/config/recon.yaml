@@ -1,0 +1,96 @@
+recon_geolocator:
+  ros__parameters:
+    manifest_path: /home/nx164/youth-vision-runtime/overlays/latest_crops/manifest_fast.json
+    frame_source_path: /home/nx164/youth-vision-runtime/overlays/latest.jpg
+    output_root: /home/nx164/youth-vision-runtime/recon_results/current
+    # Poll above the 60 FPS vision rate so every target-frame manifest can be consumed.
+    manifest_poll_hz: 120.0
+    result_write_hz: 20.0
+    snapshot_write_hz: 5.0
+
+    # Plane 2 added dataset 3 checkerboard calibration at 1440 x 1080.
+    # 64 of 66 images used; RMS 0.420359 px; mean per-view 0.343987 px.
+    calibration_valid: true
+    calibration_width: 1440
+    calibration_height: 1080
+    fx: 1828.37381407878
+    fy: 1822.99037424787
+    cx: 712.84812566646
+    cy: 531.43850968731
+    distortion: [-0.0777031466827, 0.319541903651, -0.00217329235474, -0.00289988020001, -0.380328859516]
+
+    # Image top points toward the aircraft nose. The optical axis is 70 degrees
+    # below horizontal, equivalent to 20 degrees forward from vertical-down.
+    camera_forward_tilt_deg: 20.0
+    camera_left_tilt_deg: 0.0
+    # Camera origin relative to the FCU body origin: forward, left, up in metres.
+    camera_offset_flu_m: [0.418, 0.0, -0.09]
+
+    # home_relative estimates a flat field MSL altitude as global_alt - relative_alt.
+    # fixed_msl is preferred after surveying the operating field.
+    ground_altitude_mode: home_relative
+    fixed_ground_altitude_msl_m: 0.0
+
+    # Keep RTK global data as the 5-10 Hz absolute anchor. Propagate each frame
+    # from that anchor with linear interpolation of the MAVROS ENU local EKF
+    # position. Attitude keeps quaternion interpolation between bracketing samples.
+    configure_mavlink_rates: true
+    global_position_rate_hz: 10.0
+    local_position_rate_hz: 30.0
+    attitude_stream_rate_hz: 30
+    mavlink_rate_retry_sec: 30.0
+    position_solution_mode: rtk_anchor_local_delta
+    local_velocity_topic: /mavros/local_position/velocity_local
+    global_anchor_max_age_sec: 0.35
+    local_position_max_gap_sec: 0.20
+    local_velocity_max_gap_sec: 0.20
+    local_delta_max_speed_mps: 80.0
+    local_global_disagreement_max_m: 5.0
+    telemetry_max_gap_sec: 0.20
+    rtk_max_gap_sec: 0.35
+    max_pending_manifests: 120
+    rtk_fixed_min_fix_type: 6
+
+    # Flight mode: track non-empty three-point Pose centers in image time, then
+    # select the finalized label by valid-frame majority vote.
+    # Association uses at most 0.10 s between detections. The surrounding group
+    # closes after 0.20 s with no active track. Only reassembled tracks with at
+    # least 8 unique frames can be finalized.
+    tracking_mode: pixel_packets
+    packet_gap_timeout_sec: 0.20
+    packet_association_gap_sec: 0.10
+    packet_pixel_gate_base_px: 70.0
+    packet_pixel_gate_rate_px_per_sec: 1500.0
+    packet_pixel_gate_max_px: 220.0
+    packet_max_observations: 300
+    packet_min_observations: 8
+    # Before the 8-frame judgement, reassemble only short packets when their
+    # time gap, predicted pixel motion and complete ground-point diameter agree.
+    packet_premerge_max_gap_sec: 0.20
+    packet_premerge_prediction_gate_ratio: 0.45
+    packet_premerge_max_ground_diameter_m: 2.0
+    # Rescue only sub-8-frame fragments across a genuine detector dropout.
+    # No synthetic frame is added: both sides must contain at least 3 real
+    # observations, continue in the same image direction and remain within a
+    # 2 m ground-point diameter. Existing final packets bypass this buffer.
+    packet_gap_bridge_max_gap_sec: 0.85
+    packet_gap_bridge_retention_sec: 1.20
+    packet_gap_bridge_min_fragment_observations: 3
+    packet_gap_bridge_min_direction_cosine: 0.75
+    packet_gap_bridge_max_speed_px_per_sec: 1800.0
+    packet_gap_bridge_max_ground_diameter_m: 2.0
+    packet_merge_distance_m: 1.5
+    packet_distinct_distance_m: 10.0
+
+    # Retained for static calibration and explicit rollback mode.
+    association_radius_m: 3.0
+    minimum_observations: 5
+    minimum_observation_span_sec: 0.20
+    minimum_label_consensus: 0.80
+    single_observation_sigma_m: 0.15
+    max_horizontal_radius_95_m: 6.0
+
+    # Coordinate fusion keeps every accepted frame, but gives image-center
+    # observations more influence than observations near the image boundary.
+    center_weight_minimum: 0.25
+    center_weight_power: 1.0

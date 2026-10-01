@@ -1,0 +1,6 @@
+﻿[2026-10-01 18:20:08] Reading youth-vision systemd state from nx163 (attempt 1/8)
+disabled
+inactive
+ExecStart={ path=/home/nx163/uav_ros2_project/scripts/start_competition_target_fusion.sh ; argv[]=/home/nx163/uav_ros2_project/scripts/start_competition_target_fusion.sh digit 0 --release-point-mode fixed ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }
+FragmentPath=/etc/systemd/system/youth-vision.service
+DropInPaths=/etc/systemd/system/youth-vision.service.d/time-order.conf

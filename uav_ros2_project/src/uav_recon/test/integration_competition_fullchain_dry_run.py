@@ -206,21 +206,30 @@ def main():
         prefix='competition_fullchain_'
     ) as directory:
         root = Path(directory)
+        test_mode = os.environ.get('COMPETITION_TEST_MODE', 'image')
+        if test_mode not in {'image', 'digit'}:
+            raise RuntimeError(f'unsupported COMPETITION_TEST_MODE={test_mode}')
         # Four finalized packets represent three physical targets. The weak
-        # five-metre neighbour must be suppressed before the highest-value
-        # image target is sent through the flight bridge.
-        write_result(root, 'target_a', '坦克', 3, 22.8819000, 113.4883000, 42)
+        # five-metre neighbour must be suppressed before the selected target
+        # is sent through the flight bridge.
+        if test_mode == 'digit':
+            labels = ('45', '83', '83', '67')
+            expected_label = '67'
+        else:
+            labels = ('坦克', '战斗机', '战斗机', '轰炸机')
+            expected_label = '轰炸机'
+        write_result(root, 'target_a', labels[0], 3, 22.8819000, 113.4883000, 42)
         write_result(
             root,
             'target_a_weak',
-            '战斗机',
+            labels[1],
             5,
             22.8819000,
             113.4883488,
             12,
         )
-        write_result(root, 'target_b', '战斗机', 5, 22.8819000, 113.4884464, 38)
-        write_result(root, 'target_c', '轰炸机', 9, 22.8819000, 113.4885928, 36)
+        write_result(root, 'target_b', labels[2], 5, 22.8819000, 113.4884464, 38)
+        write_result(root, 'target_c', labels[3], 9, 22.8819000, 113.4885928, 36)
 
         rclpy.init(args=[
             '--ros-args',
@@ -236,7 +245,7 @@ def main():
             make_fcu_ready(fcu)
             manager = MissionManagerNode()
             selector = CompetitionSelector(SimpleNamespace(
-                mode='image',
+                mode=test_mode,
                 session_root=root,
                 required_targets=3,
                 dedup_radius_m=10.0,
@@ -296,7 +305,7 @@ def main():
             selected = decision['selected_target']
             if (
                 selected['target_id'] != 'target_c'
-                or selected['label'] != '轰炸机'
+                or selected['label'] != expected_label
             ):
                 raise RuntimeError(
                     f'unexpected competition selection: {selected}'

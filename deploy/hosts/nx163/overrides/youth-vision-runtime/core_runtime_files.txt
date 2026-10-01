@@ -1,0 +1,66 @@
+# Youth vision core runtime file list
+# Used by pack_core_runtime.sh. Paths are relative to /home/nx163/youth-vision-runtime.
+# Excludes backups, logs, collections, overlays output, staging, old engines/models.
+
+# --- visual program ---
+native/youth_vision_runner.cpp
+native/Makefile
+native/build/youth_vision_runner
+run_youth_vision.sh
+scripts/run_youth_vision.sh
+scripts/enable_max_performance.py
+
+# --- bridge ---
+geo_bridge/config/geo_bridge.yaml
+geo_bridge/geo_bridge/__init__.py
+geo_bridge/geo_bridge/node.py
+geo_bridge/geo_bridge/overlay.py
+geo_bridge/geo_bridge/projection.py
+geo_bridge/geo_bridge/recognition.py
+geo_bridge/geo_bridge/recorder.py
+geo_bridge/geo_bridge/telemetry.py
+geo_bridge/scripts/run_geo_bridge.sh
+scripts/competition_selector.py
+scripts/competition_selector_core.py
+
+# --- startup / stop / status ---
+scripts/start_youth_pipeline.sh
+scripts/start_youth_pipeline_headless.sh
+scripts/start_youth_geo_pipeline.sh
+scripts/start_recon_pipeline.sh
+scripts/start_recon_web.sh
+scripts/start_recon_results_dashboard.sh
+scripts/competition_selected.sh
+scripts/stop_youth_pipeline.sh
+scripts/stop_recon_pipeline.sh
+scripts/stop_recon_results_dashboard.sh
+scripts/status_youth_pipeline.sh
+scripts/live_capture_server.py
+scripts/recon_results_dashboard.py
+scripts/show_latest_recon_results.py
+
+# --- configs ---
+configs/youth_pipeline.yaml
+configs/camera_capture.yaml
+configs/youth_classes_digit.txt
+configs/youth_classes_image.txt
+configs/youth_runtime_mode.txt
+
+# --- web UI pages used by live_capture_server ---
+overlays/index.html
+overlays/index_recon.html
+
+# --- currently loaded TensorRT engines ---
+engines/arrow_pose_3pt_flightdomain_0902_branch_best_fp16_nx163.engine
+engines/image_cls_fourway_balanced13_0903_night_v2_best_fp16_nx163.engine
+engines/digit_cls_balanced101_0903_night_v2_best_fp16_nx163.engine
+
+# --- matching PyTorch weights ---
+models/arrow_pose_3pt_flightdomain_0902_branch_best.pt
+models/image_cls_fourway_balanced13_0903_night_v2_best.pt
+models/digit_cls_balanced101_0903_night_v2_best.pt
+
+# --- matching ONNX (rebuild engines) ---
+onnx/arrow_pose_3pt_flightdomain_0902_branch_best.onnx
+onnx/image_cls_fourway_balanced13_0903_night_v2_best.onnx
+onnx/digit_cls_balanced101_0903_night_v2_best.onnx

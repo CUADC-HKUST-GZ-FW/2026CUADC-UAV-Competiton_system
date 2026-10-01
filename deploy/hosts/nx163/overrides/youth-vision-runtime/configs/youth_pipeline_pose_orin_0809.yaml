@@ -1,0 +1,45 @@
+# Youth YOLOv26 three-point pose runtime.
+# tip + base_left + base_right define an upright square classification crop.
+
+source: mvs
+
+mvs_index: 0
+mvs_fps: 60
+mvs_exposure_us: 10000
+mvs_gain: 6
+async_capture: true
+
+det_engine: /home/nx163/youth-vision-runtime/engines/arrow_pose_0721_1024x768_fp16_orin_0809.raw.engine
+image_cls_engine: /home/nx163/youth-vision-runtime/engines/image_cls_640_fp16.raw.engine
+digit_cls_engine: /home/nx163/youth-vision-runtime/engines/digit_cls_128_fp16.raw.engine
+
+image_labels: /home/nx163/youth-vision-runtime/configs/youth_classes_image.txt
+digit_labels: /home/nx163/youth-vision-runtime/configs/youth_classes_digit.txt
+
+classification_mode: digit
+classification_mode_file: /home/nx163/youth-vision-runtime/configs/youth_runtime_mode.txt
+
+det_width: 1024
+det_height: 768
+image_cls_size: 640
+digit_cls_size: 128
+
+conf_threshold: 0.25
+keypoint_threshold: 0.25
+square_scale: 1.0
+canonical_crop_size: 128
+max_detections: 20
+nms_iou: 0.45
+fallback_center_crop: false
+
+warmup_sec: 3
+measure_sec: 0
+print_every: 30
+
+caps_w: 0
+caps_h: 0
+
+overlay_draw: true
+overlay_jpeg: /home/nx163/youth-vision-runtime/overlays/latest.jpg
+crop_jpeg: /home/nx163/youth-vision-runtime/overlays/latest_crop_128.jpg
+overlay_every: 5

@@ -387,7 +387,7 @@ setsid bash -lc \
 flight_pid=$!
 register_child "${flight_pid}" "flight_bringup" "${RUN_DIR}/manual_flight_bringup.pid"
 
-deadline=$((SECONDS + 30))
+deadline=$((SECONDS + 90))
 while true; do
     flight_node_snapshot="$(node_list_snapshot)"
     mission_manager_count="$(
@@ -396,7 +396,9 @@ while true; do
     if ((mission_manager_count > 1)); then
         fail "duplicate /mission_manager_node instances detected count=${mission_manager_count}"
     fi
-    if [[ "${mission_manager_count}" == "1" ]]; then
+    flight_service_snapshot="$(ros2 service list --no-daemon --spin-time 3.0 2>/dev/null || true)"
+    if grep -Fqx -- /mission/disable <<<"${flight_service_snapshot}" \
+        && grep -Fqx -- /fcu/goto_global <<<"${flight_service_snapshot}"; then
         break
     fi
     if ! child_group_alive "${flight_pid}"; then
@@ -405,7 +407,7 @@ while true; do
     fi
     if ((SECONDS >= deadline)); then
         tail -40 "${FLIGHT_LOG}" >&2 || true
-        fail "mission_manager_node was not ready within 30 seconds"
+        fail "mission_manager_node was not ready within 90 seconds"
     fi
     sleep 1
 done
@@ -487,7 +489,7 @@ for index in "${!CHILD_PIDS[@]}"; do
     fi
 done
 
-deadline=$((SECONDS + 30))
+deadline=$((SECONDS + 90))
 while true; do
     graph_node_snapshot="$(node_list_snapshot)"
     recon_node_count="$(
@@ -543,11 +545,10 @@ while true; do
         fi
     done
 
-    if [[ "${recon_node_count}" == "1" ]] \
-        && [[ "${bridge_node_count}" == "1" ]] \
-        && [[ "${mission_manager_count}" == "1" ]] \
-        && [[ "${fcu_interface_count}" == "1" ]] \
-        && [[ "${recon_publishers}" == "1" ]] \
+    # Fast DDS can expose topics and services while a fresh `ros2 node list`
+    # snapshot is empty. Node counts still reject duplicates above; readiness
+    # is proven by the authoritative publishers, consumers and services.
+    if [[ "${recon_publishers}" == "1" ]] \
         && [[ "${recon_subscribers}" -ge 1 ]] \
         && [[ "${target_publishers}" == "1" ]] \
         && [[ "${target_subscribers}" -ge 1 ]] \
@@ -562,7 +563,7 @@ while true; do
     done
 
     if ((SECONDS >= deadline)); then
-        fail "vision-to-flight ROS graph was not ready within 30 seconds nodes=${mission_manager_count}/${fcu_interface_count}/${recon_node_count}/${bridge_node_count} recon=${recon_publishers}/${recon_subscribers} target=${target_publishers}/${target_subscribers} services_ready=${services_ready}"
+        fail "vision-to-flight ROS graph was not ready within 90 seconds nodes=${mission_manager_count}/${fcu_interface_count}/${recon_node_count}/${bridge_node_count} recon=${recon_publishers}/${recon_subscribers} target=${target_publishers}/${target_subscribers} services_ready=${services_ready}"
     fi
     sleep 1
 done

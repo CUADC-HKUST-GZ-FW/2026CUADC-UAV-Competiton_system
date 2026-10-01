@@ -5,6 +5,7 @@ from uav_recon.core import (
     FramePacket,
     Observation,
     PixelFramePacketManager,
+    ShortPacketGapBridgeBuffer,
     TimedBuffer,
     Track,
     geodetic_delta_m,
@@ -324,6 +325,221 @@ def test_pixel_packet_manager_keeps_label_flicker_in_same_track():
     second = manager.add(packet_observation(1.02, 2, (112.0, 101.0), label='50'))
     assert second is first
     assert [item.label for item in first.observations] == ['85', '50']
+
+
+def short_packet(packet_id, timestamps, centers, east_m=0.0, label='85'):
+    packet = FramePacket(packet_id, label)
+    for index, (timestamp, center) in enumerate(zip(timestamps, centers)):
+        packet.add(packet_observation(
+            timestamp=timestamp,
+            frame_number=round(timestamp * 1000) + index,
+            center_px=center,
+            east_m=east_m,
+            label=label,
+        ))
+    return packet
+
+
+def test_short_packet_premerge_uses_time_prediction_and_ground_diameter():
+    manager = PixelFramePacketManager()
+    first = short_packet(
+        'packet_0009',
+        [1.000, 1.033, 1.083],
+        [(645.0, 701.0), (656.0, 737.0), (695.0, 790.0)],
+        east_m=0.0,
+        label='helicopter',
+    )
+    second = short_packet(
+        'packet_0010',
+        [1.199, 1.216, 1.233, 1.250, 1.283],
+        [(824.0, 914.0), (836.0, 931.0), (844.0, 949.0),
+         (850.0, 970.0), (852.0, 1008.0)],
+        east_m=0.5,
+        label='helicopter',
+    )
+
+    packets, decisions = manager.reassemble_short_packets(
+        [first, second],
+        minimum_observations=8,
+        max_gap_sec=0.20,
+        prediction_gate_ratio=0.45,
+        max_ground_diameter_m=2.0,
+    )
+
+    assert len(packets) == 1
+    assert len(packets[0].observations) == 8
+    assert packets[0].source_packet_ids == ['packet_0009', 'packet_0010']
+    assert decisions[0]['prediction_residual_px'] <= 0.45 * decisions[0]['prediction_gate_px']
+    assert decisions[0]['ground_diameter_m'] <= 2.0
+
+
+def test_short_packet_premerge_can_back_predict_from_later_packet():
+    manager = PixelFramePacketManager()
+    first = short_packet('packet_0001', [1.0], [(100.0, 100.0)])
+    second = short_packet(
+        'packet_0002',
+        [1.15, 1.16, 1.17, 1.18],
+        [(250.0, 100.0), (260.0, 100.0), (270.0, 100.0), (280.0, 100.0)],
+        east_m=0.2,
+    )
+
+    packets, decisions = manager.reassemble_short_packets(
+        [first, second], 8, 0.20, 0.45, 2.0
+    )
+
+    assert len(packets) == 1
+    assert len(packets[0].observations) == 5
+    assert decisions[0]['prediction_direction'] == 'backward'
+
+
+def test_short_packet_premerge_rejects_failed_hard_conditions():
+    manager = PixelFramePacketManager()
+    base = short_packet(
+        'packet_0001',
+        [1.00, 1.02, 1.04],
+        [(100.0, 100.0), (120.0, 100.0), (140.0, 100.0)],
+    )
+    late = short_packet(
+        'packet_0002',
+        [1.25, 1.27],
+        [(350.0, 100.0), (370.0, 100.0)],
+    )
+    bad_prediction = short_packet(
+        'packet_0003',
+        [1.15, 1.17],
+        [(500.0, 500.0), (520.0, 500.0)],
+    )
+    far_ground = short_packet(
+        'packet_0004',
+        [1.15, 1.17],
+        [(250.0, 100.0), (270.0, 100.0)],
+        east_m=2.1,
+    )
+
+    for candidate in (late, bad_prediction, far_ground):
+        packets, decisions = manager.reassemble_short_packets(
+            [base, candidate], 8, 0.20, 0.45, 2.0
+        )
+        assert len(packets) == 2
+        assert decisions == []
+
+
+def test_short_packet_premerge_does_not_change_existing_final_packet():
+    manager = PixelFramePacketManager()
+    final_packet = short_packet(
+        'packet_0001',
+        [1.0 + index / 60.0 for index in range(8)],
+        [(100.0 + 10.0 * index, 100.0) for index in range(8)],
+    )
+    continuation = short_packet(
+        'packet_0002',
+        [1.20, 1.22, 1.24],
+        [(220.0, 100.0), (230.0, 100.0), (240.0, 100.0)],
+    )
+
+    packets, decisions = manager.reassemble_short_packets(
+        [final_packet, continuation], 8, 0.20, 0.45, 2.0
+    )
+
+    assert len(packets) == 2
+    assert decisions == []
+    assert len(final_packet.observations) == 8
+
+
+def test_gap_bridge_recovers_real_0929_five_plus_five_detector_hole():
+    manager = PixelFramePacketManager()
+    bridge = ShortPacketGapBridgeBuffer(
+        manager,
+        minimum_observations=8,
+        max_gap_sec=0.85,
+        retention_sec=1.20,
+        minimum_fragment_observations=3,
+        minimum_direction_cosine=0.75,
+        max_speed_px_per_sec=1800.0,
+        max_ground_diameter_m=2.0,
+    )
+    first = short_packet(
+        'packet_0003',
+        [0.00000, 0.01650, 0.03301, 0.08265, 0.18160],
+        [(623.44, 62.26), (631.88, 74.77), (637.03, 88.43),
+         (653.09, 126.94), (697.73, 209.27)],
+        east_m=0.0,
+    )
+    second = short_packet(
+        'packet_0004',
+        [0.90803, 0.92455, 0.94110, 0.99056, 1.00709],
+        [(855.47, 903.05), (854.30, 922.03), (852.19, 940.55),
+         (837.66, 997.27), (835.08, 1016.72)],
+        east_m=0.4,
+    )
+
+    ready, expired, decisions = bridge.offer([first], first.last_timestamp)
+    assert ready == []
+    assert expired == []
+    assert decisions == []
+    assert bridge.pending_packet_count == 1
+
+    ready, expired, decisions = bridge.offer([second], second.last_timestamp)
+    assert expired == []
+    assert bridge.pending_packet_count == 0
+    assert len(ready) == 1
+    assert len(ready[0].observations) == 10
+    assert ready[0].source_packet_ids == ['packet_0003', 'packet_0004']
+    assert decisions[0]['action'] == 'bridge_detector_gap'
+    assert abs(decisions[0]['gap_sec'] - 0.72643) < 1e-5
+    assert decisions[0]['minimum_direction_cosine'] > 0.90
+    assert decisions[0]['speed_px_per_sec'] < 1000.0
+    assert decisions[0]['ground_diameter_m'] <= 2.0
+
+
+def test_gap_bridge_rejects_far_ground_or_reversed_motion():
+    manager = PixelFramePacketManager()
+    first = short_packet(
+        'packet_0001',
+        [1.00, 1.03, 1.06],
+        [(100.0, 100.0), (110.0, 130.0), (120.0, 160.0)],
+    )
+    far_ground = short_packet(
+        'packet_0002',
+        [1.50, 1.53, 1.56],
+        [(180.0, 500.0), (190.0, 530.0), (200.0, 560.0)],
+        east_m=2.1,
+    )
+    reversed_motion = short_packet(
+        'packet_0003',
+        [1.50, 1.53, 1.56],
+        [(180.0, 500.0), (170.0, 470.0), (160.0, 440.0)],
+    )
+
+    packets, decisions = manager.bridge_short_packet_gaps(
+        [first, far_ground], 8, 0.85, 3, 0.75, 1800.0, 2.0
+    )
+    assert len(packets) == 2
+    assert decisions == []
+
+    packets, decisions = manager.bridge_short_packet_gaps(
+        [first, reversed_motion], 8, 0.85, 3, 0.75, 1800.0, 2.0
+    )
+    assert len(packets) == 2
+    assert decisions == []
+
+
+def test_gap_bridge_expires_unmatched_short_packet_without_finalizing_it():
+    manager = PixelFramePacketManager()
+    bridge = ShortPacketGapBridgeBuffer(manager, 8, retention_sec=1.20)
+    packet = short_packet(
+        'packet_0001',
+        [2.00, 2.03, 2.06],
+        [(100.0, 100.0), (110.0, 120.0), (120.0, 140.0)],
+    )
+    ready, expired, decisions = bridge.offer([packet], 2.06)
+    assert ready == []
+    assert expired == []
+    assert decisions == []
+
+    expired = bridge.expire(3.260001)
+    assert expired == [packet]
+    assert bridge.pending_packet_count == 0
 
 
 def test_pixel_packet_manager_forces_group_close_at_frame_limit():

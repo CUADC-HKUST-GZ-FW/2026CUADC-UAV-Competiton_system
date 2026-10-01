@@ -226,7 +226,7 @@ def main():
             '-p', 'd_offset_m:=50.0',
             '-p', 'ground_altitude_mode:=fixed_msl',
             '-p', 'fixed_ground_altitude_msl_m:=0.0',
-            '-p', 'packet_min_observations:=11',
+            '-p', 'packet_min_observations:=8',
             '-p', 'minimum_observation_span_sec:=0.20',
             '-p', 'max_horizontal_radius_95_m:=6.0',
         ])

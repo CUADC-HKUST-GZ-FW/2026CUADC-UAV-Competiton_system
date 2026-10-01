@@ -97,6 +97,48 @@ class VisionTargetRetryTest(unittest.TestCase):
         self.assertEqual(attempts, self.node.target_publish_attempts)
         self.assertEqual('manager_accepted_target', self.node.automation_phase)
 
+    def test_safe_state_retains_target_and_retries_after_recovery(self):
+        self.node.target_callback(self.finalized_target())
+        self.assertEqual(1, self.node.target_publish_attempts)
+
+        state = String()
+        state.data = 'SAFE'
+        self.node.mission_state_callback(state)
+        self.assertEqual('waiting_for_manager_ack', self.node.automation_phase)
+
+        self.node.target_published_monotonic = time.monotonic() - 1.0
+        self.node.drive_automation()
+        self.assertEqual(1, self.node.target_publish_attempts)
+
+        state.data = 'WAIT_FCU'
+        self.node.mission_state_callback(state)
+        state.data = 'STANDBY'
+        self.node.mission_state_callback(state)
+        self.node.drive_automation()
+
+        self.assertEqual(2, self.node.target_publish_attempts)
+        self.assertEqual('waiting_for_manager_ack', self.node.automation_phase)
+
+    def test_wait_timeout_does_not_discard_unpublished_target(self):
+        state = String()
+        state.data = 'SAFE'
+        self.node.mission_state_callback(state)
+        self.node.target_callback(self.finalized_target())
+        self.assertEqual(0, self.node.target_publish_attempts)
+
+        self.node.phase_started_monotonic = time.monotonic() - 60.0
+        self.node.automation_started_monotonic = time.monotonic() - 60.0
+        self.node.drive_automation()
+
+        self.assertEqual('waiting_for_standby', self.node.automation_phase)
+        self.assertIsNotNone(self.node.pending_target)
+
+        state.data = 'STANDBY'
+        self.node.mission_state_callback(state)
+
+        self.assertEqual(1, self.node.target_publish_attempts)
+        self.assertEqual('waiting_for_manager_ack', self.node.automation_phase)
+
     def test_two_candidate_mode_selects_stronger_second_final(self):
         self.use_two_candidate_selection()
         self.set_mission_seq(3)

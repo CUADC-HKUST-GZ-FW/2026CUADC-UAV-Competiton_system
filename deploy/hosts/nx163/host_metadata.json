@@ -1,0 +1,9 @@
+﻿{
+    "host":  "nx163",
+    "ssh_address":  "10.7.146.251",
+    "ssh_user":  "nx163",
+    "captured_at":  "2026-10-01T18:20:33.2967375+08:00",
+    "active_uav_path":  "/home/nx163/uav_ros2_project",
+    "active_vision_path":  "/home/nx163/youth-vision-runtime",
+    "service_path":  "/etc/systemd/system/youth-vision.service"
+}
