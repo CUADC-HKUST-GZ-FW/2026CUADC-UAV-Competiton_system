@@ -1,0 +1,82 @@
+{
+  "release_id": "20261004_image_zigong_airport_domain",
+  "task": "image_classification",
+  "class_count": 13,
+  "labels": [
+    "侦察机",
+    "卡车",
+    "固定翼",
+    "坦克",
+    "多旋翼",
+    "战斗机",
+    "机枪兵",
+    "火箭兵",
+    "直升机",
+    "轰炸机",
+    "运输机",
+    "防空炮",
+    "empty"
+  ],
+  "input_shape": [1, 3, 128, 128],
+  "output_shape": [1, 13],
+  "source_weight": {
+    "file": "image_zigong_airport_domain_1004_best.pt",
+    "bytes": 3235232,
+    "sha256": "50874cca560cfe2bc9f955bb14dd1b15ae16303ba7128ac97754f453bff66869"
+  },
+  "onnx": {
+    "file": "image_zigong_airport_domain_1004_best.onnx",
+    "bytes": 6217647,
+    "sha256": "a6cf9954724116e3a45a221a96d3e03d5d86818bb1390a2440b6731f2fa5c7a1",
+    "opset": 17,
+    "static_batch": 1
+  },
+  "export_validation": {
+    "pytorch_output_shape": [1, 13],
+    "onnx_output_shape": [1, 13],
+    "random_input_max_abs_diff": 2.3419488570652902e-11,
+    "random_argmax_match": "8/8",
+    "real_validation_max_abs_diff": 2.384185791015625e-7,
+    "real_validation_argmax_match": "13/13"
+  },
+  "training_lineage": {
+    "dataset": "image_target_dataset_zigong_domain_balanced13_1004_v1",
+    "dataset_summary_sha256": "94fc13078f923dfe01f4d4476a19f23f8f09d0b25b6688d3984e24193c1771d2",
+    "checkpoint_sweep_sha256": "bde9a94d6ad2b79a3b32aaa16dd8afff2f1346c5357bba0c4d7e132b46b9c3a6",
+    "training_report_sha256": "f717ae2f6bd4944388db884c87af8f929bc420e12d88ad2e87e0053aa6b6d5e1",
+    "selected_checkpoint": "gloo_epoch0"
+  },
+  "offline_validation": {
+    "transport_150029": "46/47",
+    "transport_152345": "47/47",
+    "transport_training_151217": "16/16",
+    "max_consecutive_rocket_misclassification": 0,
+    "historical_regression": "266/276",
+    "previous_historical_regression": "264/276",
+    "real_empty": "20/20"
+  },
+  "approval": {
+    "approved_by_user": true,
+    "approved_on": "2026-10-04",
+    "note": "User explicitly decided to adopt the new Zigong airport-domain image classifier."
+  },
+  "previous_release_backup": {
+    "release_id": "20260917_image_real_blank_gloo",
+    "weight": {
+      "file": "previous/image_real_blank_gloo_best.pt",
+      "bytes": 3229109,
+      "sha256": "3aeef18d24551f5beba6d25f0537055267a15e31cd3ecae397fdbaaa7dd2497a"
+    },
+    "onnx": {
+      "file": "previous/image_real_blank_gloo_best.onnx",
+      "bytes": 6217639,
+      "sha256": "9d38de2053e0c15809f5c5a36f1a37e4f8c2ddc0773d4f76b52081b4db90b03d"
+    }
+  },
+  "device_builds": {
+    "nx163": "image_zigong_airport_domain_1004_best_fp16_nx163.engine",
+    "nx164": "image_zigong_airport_domain_1004_best_fp16_nx164.engine",
+    "rule": "Build each TensorRT engine on its target Jetson. Never copy an engine between devices."
+  },
+  "deployment_status": "approved_source_release_not_yet_built_on_jetsons"
+}

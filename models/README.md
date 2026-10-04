@@ -4,9 +4,11 @@
 
 当前图案分类源模型：
 
-- `releases/20260917_image_real_blank_gloo/image_real_blank_gloo_best.pt`
-- `releases/20260917_image_real_blank_gloo/image_real_blank_gloo_best.onnx`
-- 详细状态见同目录 `manifest.json`。该版本已按用户要求部署，但 0916 四方向空标靶独立验收未通过，不能把“链路可运行”等同于“模型精度已验收”。
+- `releases/20261004_image_zigong_airport_domain/image_zigong_airport_domain_1004_best.pt`
+- `releases/20261004_image_zigong_airport_domain/image_zigong_airport_domain_1004_best.onnx`
+- 同目录 `previous/` 保存此前部署的 0917 Gloo 图案模型 `.pt/.onnx`，`manifest.json` 保存新旧哈希和离线验收结果。
+- NX163 与 NX164 必须分别在本机生成带各自设备名后缀的 TensorRT engine；部署入口为 `deploy/deploy_image_model_20261004.sh`。
+- 旧 release `releases/20260917_image_real_blank_gloo/` 原样保留，可用于审计与回退。
 
 当前数字分类源模型：
 
