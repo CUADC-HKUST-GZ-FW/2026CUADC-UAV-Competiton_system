@@ -1,0 +1,69 @@
+{
+  "release_id": "20261004_digit_large101_v4_conservative",
+  "task": "digit_classification",
+  "class_count": 101,
+  "labels": {
+    "indices_0_to_99": "zero-padded decimal labels 00 through 99",
+    "index_100": "empty"
+  },
+  "input_shape": [1, 3, 128, 128],
+  "output_shape": [1, 101],
+  "source_weight": {
+    "file": "digit_cls_large101_1003_v4_conservative_best.pt",
+    "bytes": 3440194,
+    "sha256": "74873fef6f87716465de1b090c07e60abc47e10e4e72fbfd40c3e3eb7bbaf89c"
+  },
+  "onnx": {
+    "file": "digit_cls_large101_1003_v4_conservative_best.onnx",
+    "bytes": 6669332,
+    "sha256": "a707fc46520cd942bc1b97fe5b1b2d0dd942608978f1cba32e363ae84c075ef2",
+    "opset": 17,
+    "static_batch": 1
+  },
+  "export_validation": {
+    "pytorch_output_shape": [1, 101],
+    "onnx_output_shape": [1, 101],
+    "random_input_max_abs_diff": 4.69299266114831e-10,
+    "argmax_match": true
+  },
+  "training_lineage": {
+    "dataset_manifest": "dataset_manifest_v5.json",
+    "dataset_manifest_sha256": "8a412ac1cb0ec182fb01a3702d3df844a397c472b3cd8eb3ca748f6ef45b43bd",
+    "training_config_sha256": "6456c2a8c67541dc0c205bc2dc9666795adcfcc14cbc8a44512bc145026cacdd",
+    "training_result_sha256": "16fda9d5d49a289f5d1c7bdae196af52ab7d8d42445a190046db0d2a894fb2a7",
+    "evaluation_sha256": "e7cd1a4fb8f715165f54603a4f197b591a76d5168f6df9948a3c6a5a81426d9b"
+  },
+  "offline_validation": {
+    "0929_true_68": "47/48",
+    "1001_clear_true_75": "45/45",
+    "nx164_manual_crops": "25/31",
+    "nx164_pose_crops": "20/26",
+    "nx163_0922_review": "80/91",
+    "0829_low_light_holdout": "19/22",
+    "0911_gold": "9/9",
+    "frozen_base_validation": "5047/5050"
+  },
+  "approval": {
+    "approved_by_user": true,
+    "approved_on": "2026-10-04",
+    "note": "User accepted the candidate after reviewing the known low-quality 0829 regression image. The historical evaluation result remains recorded rather than being rewritten."
+  },
+  "previous_release_backup": {
+    "weight": {
+      "file": "previous/digit_cls_balanced101_0903_night_v2_best.pt",
+      "bytes": 3441026,
+      "sha256": "98d7e49255fedefc4f48b79ebbd0137f0336bf0a4a919c5683658f636ff17e24"
+    },
+    "onnx": {
+      "file": "previous/digit_cls_balanced101_0903_night_v2_best.onnx",
+      "bytes": 6651402,
+      "sha256": "9dc7c490552b62fe93f3220573bf3c9d22548e06e85d4472a1baf19e54e57520"
+    }
+  },
+  "device_builds": {
+    "nx163": "digit_cls_large101_1003_v4_conservative_best_fp16_nx163.engine",
+    "nx164": "digit_cls_large101_1003_v4_conservative_best_fp16_nx164.engine",
+    "rule": "Build each TensorRT engine on its target Jetson. Never copy an engine between devices."
+  },
+  "deployment_status": "approved_source_release_not_yet_built_on_jetsons"
+}
