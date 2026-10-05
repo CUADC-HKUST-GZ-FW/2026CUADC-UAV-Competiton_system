@@ -1,0 +1,82 @@
+{
+  "release_id": "20261006_image_tanktruck_candidate",
+  "task": "image_classification",
+  "class_count": 13,
+  "labels": [
+    "侦察机",
+    "卡车",
+    "固定翼",
+    "坦克",
+    "多旋翼",
+    "战斗机",
+    "机枪兵",
+    "火箭兵",
+    "直升机",
+    "轰炸机",
+    "运输机",
+    "防空炮",
+    "empty"
+  ],
+  "runtime_label_source": "youth-vision-runtime/configs/youth_classes_image.txt",
+  "embedded_checkpoint_label_12": "龘空标靶",
+  "input_shape": [1, 3, 128, 128],
+  "output_shape": [1, 13],
+  "source_weight": {
+    "file": "image_zigong_tanktruck_1006_candidate.pt",
+    "bytes": 12617623,
+    "sha256": "15543e62323f308c8865da88e955e11e37b8ec72af4c7fedf4ecaa94b7819a5d"
+  },
+  "onnx": {
+    "file": "image_zigong_tanktruck_1006_candidate.onnx",
+    "bytes": 6217650,
+    "sha256": "2a131af10fc0de41fedbcce9aa9537a119ae1838d671866d2e90d455f2095dcb",
+    "opset": 17,
+    "static_batch": 1,
+    "onnx_checker": "passed"
+  },
+  "export_validation": {
+    "pytorch_output_shape": [1, 13],
+    "onnx_output_shape": [1, 13],
+    "random_input_max_abs_diff": 1.1920928955078125e-7,
+    "random_argmax_match": "8/8",
+    "real_validation_max_abs_diff": 5.960464477539062e-7,
+    "real_validation_argmax_match": "13/13"
+  },
+  "training_lineage": {
+    "dataset": "image_target_dataset_zigong_tanktruck_balanced13_1006_v1",
+    "source_release": "20261004_image_zigong_airport_domain",
+    "source_weight_sha256": "50874cca560cfe2bc9f955bb14dd1b15ae16303ba7128ac97754f453bff66869",
+    "checkpoint_sweep_sha256": "53fcf052320a98ff688ccf5cda69191426880acf6de656708cc8a79200c25e09",
+    "training_report_sha256": "0dfe03ea474100674d0769e7ecac203824aa407a623203a4c8ace85207188740",
+    "selected_checkpoint": "tanktruck_full_epoch10"
+  },
+  "offline_validation": {
+    "web_screenshot_true_tank": "1/1, tank 98.31%",
+    "baseline_web_screenshot_result": "truck 99.995%",
+    "hard_tank_0817": "1/2",
+    "tank_truck_holdout_0829": "16/16",
+    "historical_regression": "266/276",
+    "current_model_historical_regression": "266/276",
+    "real_empty": "20/20",
+    "transport_150029": "46/47",
+    "transport_152345": "47/47",
+    "transport_training_151217": "16/16",
+    "max_consecutive_rocket_misclassification": 0
+  },
+  "approval": {
+    "approved_for_github_candidate_release": true,
+    "approved_for_jetson_deployment": false,
+    "blocker": "Record independent tank and truck flight videos not used by training, then pass PT/ONNX/TensorRT and finalized-packet A/B validation."
+  },
+  "previous_production_release": {
+    "release_id": "20261004_image_zigong_airport_domain",
+    "weight_sha256": "50874cca560cfe2bc9f955bb14dd1b15ae16303ba7128ac97754f453bff66869",
+    "onnx_sha256": "a6cf9954724116e3a45a221a96d3e03d5d86818bb1390a2440b6731f2fa5c7a1"
+  },
+  "device_builds": {
+    "nx163": "image_zigong_tanktruck_1006_candidate_fp16_nx163.engine",
+    "nx164": "image_zigong_tanktruck_1006_candidate_fp16_nx164.engine",
+    "rule": "Build each TensorRT engine on its target Jetson. Never copy an engine between devices."
+  },
+  "deployment_status": "candidate_not_deployed_independent_video_required"
+}
