@@ -75,6 +75,11 @@ readonly SERVICE_USER="$(stat -c '%U' -- "${PROJECT_ROOT}")"
 readonly SERVICE_HOME="$(getent passwd "${SERVICE_USER}" | cut -d: -f6)"
 readonly UNIT_PATH="/etc/systemd/system/youth-vision.service"
 readonly OBSOLETE_OVERRIDE="/etc/systemd/system/youth-vision.service.d/competition-image.conf"
+readonly RECORD_DURATION_SEC="600"
+readonly RECORD_FPS="60"
+readonly RECORD_BITRATE_KBPS="12000"
+readonly RAW_MIN_FREE_KB="2097152"
+readonly RAW_VIDEO_DIR="${SERVICE_HOME}/camera_recordings"
 UNIT_TEMP_DIR="$(mktemp -d /tmp/youth-vision-unit.XXXXXX)"
 readonly UNIT_TEMP_DIR
 UNIT_TEMP="${UNIT_TEMP_DIR}/youth-vision.service"
@@ -97,6 +102,12 @@ Type=simple
 User=${SERVICE_USER}
 Environment=HOME=${SERVICE_HOME}
 Environment=UAV_FOREGROUND=1
+Environment=YOUTH_SAVE_RAW_VIDEO=1
+Environment=YOUTH_RECORD_DURATION_SEC=${RECORD_DURATION_SEC}
+Environment=YOUTH_RECORD_FPS=${RECORD_FPS}
+Environment=YOUTH_RECORD_BITRATE_KBPS=${RECORD_BITRATE_KBPS}
+Environment=YOUTH_RAW_MIN_FREE_KB=${RAW_MIN_FREE_KB}
+Environment=YOUTH_RAW_VIDEO_DIR=${RAW_VIDEO_DIR}
 WorkingDirectory=${PROJECT_ROOT}
 ExecStart=${ENTRY_SCRIPT} ${MODE} ${HEADING_DEG} --release-point-mode ${RELEASE_POINT_MODE}
 Restart=on-failure
@@ -117,6 +128,21 @@ rm -f -- "${OBSOLETE_OVERRIDE}"
 systemctl daemon-reload
 systemctl enable youth-vision.service >/dev/null
 
+service_environment="$(systemctl show youth-vision.service -p Environment --value)"
+for expected_setting in \
+    "YOUTH_SAVE_RAW_VIDEO=1" \
+    "YOUTH_RECORD_DURATION_SEC=${RECORD_DURATION_SEC}" \
+    "YOUTH_RECORD_FPS=${RECORD_FPS}" \
+    "YOUTH_RECORD_BITRATE_KBPS=${RECORD_BITRATE_KBPS}" \
+    "YOUTH_RAW_MIN_FREE_KB=${RAW_MIN_FREE_KB}" \
+    "YOUTH_RAW_VIDEO_DIR=${RAW_VIDEO_DIR}"
+do
+    if [[ " ${service_environment} " != *" ${expected_setting} "* ]]; then
+        echo "installed service is missing recording setting: ${expected_setting}" >&2
+        exit 1
+    fi
+done
+
 if [[ "${APPLY_ACTION}" == "--restart" ]]; then
     systemctl restart youth-vision.service
 fi
@@ -126,6 +152,9 @@ echo "chain=${CHAIN}"
 echo "mode=${MODE}"
 echo "heading_deg=${HEADING_DEG}"
 echo "release_point_mode=${RELEASE_POINT_MODE}"
+echo "raw_video_recording=enabled"
+echo "record_duration_sec=${RECORD_DURATION_SEC}"
+echo "record_output_dir=${RAW_VIDEO_DIR}"
 echo "action=${APPLY_ACTION}"
 systemctl show youth-vision.service \
-    -p UnitFileState -p ActiveState -p SubState -p ExecStart
+    -p UnitFileState -p ActiveState -p SubState -p ExecStart -p Environment

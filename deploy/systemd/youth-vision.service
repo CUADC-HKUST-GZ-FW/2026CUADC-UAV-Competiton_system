@@ -8,6 +8,12 @@ Type=simple
 User=@UAV_USER@
 Environment=HOME=@UAV_HOME@
 Environment=UAV_FOREGROUND=1
+Environment=YOUTH_SAVE_RAW_VIDEO=1
+Environment=YOUTH_RECORD_DURATION_SEC=600
+Environment=YOUTH_RECORD_FPS=60
+Environment=YOUTH_RECORD_BITRATE_KBPS=12000
+Environment=YOUTH_RAW_MIN_FREE_KB=2097152
+Environment=YOUTH_RAW_VIDEO_DIR=@UAV_HOME@/camera_recordings
 WorkingDirectory=@UAV_PROJECT_DIR@
 ExecStart=@UAV_PROJECT_DIR@/scripts/start_single_target_fusion.sh image @HEADING_DEG@
 Restart=on-failure
