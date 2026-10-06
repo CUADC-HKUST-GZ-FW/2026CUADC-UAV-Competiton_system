@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${ROOT:-/home/nx163/youth-vision-runtime}"
+ROOT="${ROOT:-/home/nx164/youth-vision-runtime}"
 MODE="${1:-digit}"
 CONFIG="${CONFIG:-$ROOT/configs/youth_pipeline.yaml}"
 LOG_DIR="$ROOT/logs"
 SESSION_DIR="$LOG_DIR/sessions"
 EVENT_DIR="$LOG_DIR/recognition"
+CAMERA_HEALTH_DIR="$LOG_DIR/camera_health"
 LIB_PATH="/opt/MVS/lib/aarch64:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu/nvidia"
 
 if [[ "$MODE" != "digit" && "$MODE" != "image" ]]; then
@@ -31,13 +32,14 @@ sleep 1
 sudo -n /usr/sbin/nvpmodel -m 0 >/dev/null
 sudo -n /usr/bin/jetson_clocks >/dev/null
 
-mkdir -p "$LOG_DIR" "$SESSION_DIR" "$EVENT_DIR"
+mkdir -p "$LOG_DIR" "$SESSION_DIR" "$EVENT_DIR" "$CAMERA_HEALTH_DIR"
 echo "$MODE" > "$ROOT/configs/youth_runtime_mode.txt"
 
 stamp="$(date +%Y%m%d_%H%M%S)"
 session_id="${stamp}_${MODE}_headless"
 session_log="$SESSION_DIR/youth_pipeline_${session_id}.log"
 event_log="$EVENT_DIR/recognition_events_${session_id}.jsonl"
+camera_monitor_log="$CAMERA_HEALTH_DIR/camera_health_${session_id}.jsonl"
 legacy_log="$LOG_DIR/youth_pipeline_${MODE}.log"
 
 if [[ -f "$legacy_log" && ! -L "$legacy_log" ]]; then
@@ -54,6 +56,8 @@ rm -f "$LOG_DIR/live_capture_server.pid"
 nohup env \
   YOUTH_SESSION_ID="$session_id" \
   YOUTH_RECOGNITION_LOG="$event_log" \
+  YOUTH_CAMERA_MONITOR_LOG="$camera_monitor_log" \
+  YOUTH_CAMERA_MONITOR_INTERVAL_SEC=2 \
   LD_LIBRARY_PATH="$LIB_PATH" \
   "$ROOT/native/build/youth_vision_runner" \
     --config "$CONFIG" \
@@ -68,6 +72,7 @@ for _ in $(seq 1 20); do
     echo "headless pipeline ready: mode=$MODE pid=$pid"
     echo "session_log=$session_log"
     echo "recognition_log=$event_log"
+    echo "camera_monitor_log=$camera_monitor_log"
     exit 0
   fi
   if ! kill -0 "$pid" 2>/dev/null; then
@@ -82,3 +87,4 @@ echo "headless pipeline started; warmup is still in progress"
 echo "pid=$pid"
 echo "session_log=$session_log"
 echo "recognition_log=$event_log"
+echo "camera_monitor_log=$camera_monitor_log"

@@ -18,6 +18,7 @@
 #include <cstring>
 #include <deque>
 #include <fstream>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -958,6 +959,8 @@ class MvsCapture {
       }
     }
     auto* info = list.pDeviceInfo[idx];
+    model_ = mvs_device_model(info);
+    serial_ = mvs_device_serial(info);
     if (info->nTLayerType == MV_USB_DEVICE) {
       std::cerr << "[MVS] USB3Vision model="
                 << mvs_chars_to_string(info->SpecialInfo.stUsb3VInfo.chModelName, sizeof(info->SpecialInfo.stUsb3VInfo.chModelName))
@@ -988,6 +991,8 @@ class MvsCapture {
     MV_CC_SetImageNodeNum(handle_, 4);
     check_mvs(MV_CC_StartGrabbing(handle_), "MV_CC_StartGrabbing");
     grabbing_ = true;
+    configure_monitor();
+    write_monitor(true);
   }
 
   ~MvsCapture() { close(); }
@@ -1000,9 +1005,14 @@ class MvsCapture {
     MV_FRAME_OUT frame{};
     int ret = MV_CC_GetImageBuffer(handle_, &frame, 1000);
     if (ret != MV_OK) {
+      ++read_failures_;
+      last_error_ = ret;
       std::cerr << "[MVS] GetImageBuffer failed: 0x" << std::hex << ret << std::dec << "\n";
+      write_monitor(false);
       return false;
     }
+    ++frames_received_;
+    last_error_ = MV_OK;
     const auto system_now = std::chrono::system_clock::now();
     const auto monotonic_now = Clock::now();
     timing.unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1031,11 +1041,89 @@ class MvsCapture {
       std::cerr << "[MVS] ConvertPixelType failed: 0x" << std::hex << ret << std::dec << "\n";
       return false;
     }
+    write_monitor(true);
     out = cv::Mat(height, width, CV_8UC3, bgr_.data());
     return true;
   }
 
  private:
+  static std::string utc_now() {
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+    gmtime_r(&t, &tm);
+    std::ostringstream out;
+    out << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
+    return out.str();
+  }
+
+  static std::string json_number_or_null(int ret, double value) {
+    if (ret != MV_OK) return "null";
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(3) << value;
+    return out.str();
+  }
+
+  void configure_monitor() {
+    const char* log_path = std::getenv("YOUTH_CAMERA_MONITOR_LOG");
+    if (log_path && *log_path) {
+      monitor_path_ = log_path;
+    } else {
+      const char* session = std::getenv("YOUTH_SESSION_ID");
+      const std::string session_id = session && *session ? session : "manual_" + utc_now();
+      monitor_path_ = "/home/nx164/youth-vision-runtime/logs/camera_health/camera_health_" + session_id + ".jsonl";
+    }
+    monitor_interval_sec_ = 2.0;
+    try {
+      const auto parent = std::filesystem::path(monitor_path_).parent_path();
+      if (!parent.empty()) std::filesystem::create_directories(parent);
+    } catch (const std::exception& e) {
+      std::cerr << "[MVS] camera monitor log directory unavailable: " << e.what() << "\n";
+      monitor_path_.clear();
+    }
+    next_monitor_ = Clock::now();
+  }
+
+  void write_monitor(bool read_ok) {
+    if (monitor_path_.empty()) return;
+    const auto now = Clock::now();
+    if (now < next_monitor_) return;
+    next_monitor_ = now + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(monitor_interval_sec_));
+    MVCC_FLOATVALUE f{};
+    const int frame_rate_ret = MV_CC_GetFloatValue(handle_, "ResultingFrameRate", &f);
+    const double resulting_fps = f.fCurValue;
+    const int acquisition_rate_ret = MV_CC_GetFloatValue(handle_, "AcquisitionFrameRate", &f);
+    const double acquisition_fps = f.fCurValue;
+    const int exposure_ret = MV_CC_GetFloatValue(handle_, "ExposureTime", &f);
+    const double exposure_us = f.fCurValue;
+    const int packet_delay_ret = MV_CC_GetFloatValue(handle_, "GevSCPD", &f);
+    const double packet_delay = f.fCurValue;
+    MVCC_INTVALUE_EX packet_size{};
+    const int packet_size_ret = MV_CC_GetIntValueEx(handle_, "GevSCPSPacketSize", &packet_size);
+    bool rate_enabled = false;
+    const int rate_enabled_ret = MV_CC_GetBoolValue(handle_, "AcquisitionFrameRateEnable", &rate_enabled);
+    MVCC_ENUMVALUE exposure_auto{};
+    const int exposure_auto_ret = MV_CC_GetEnumValue(handle_, "ExposureAuto", &exposure_auto);
+    std::ofstream log(monitor_path_, std::ios::app);
+    if (!log) return;
+    log << "{\"timestamp_utc\":\"" << utc_now()
+        << "\",\"model\":\"" << json_escape(model_)
+        << "\",\"serial\":\"" << json_escape(serial_)
+        << "\",\"sdk_version\":\"0x" << std::hex << MV_CC_GetSDKVersion() << std::dec
+        << "\",\"read_ok\":" << (read_ok ? "true" : "false")
+        << ",\"frames_received\":" << frames_received_
+        << ",\"read_failures\":" << read_failures_
+        << ",\"last_error\":\"0x" << std::hex << last_error_ << std::dec << "\""
+        << ",\"resulting_fps\":" << json_number_or_null(frame_rate_ret, resulting_fps)
+        << ",\"acquisition_fps\":" << json_number_or_null(acquisition_rate_ret, acquisition_fps)
+        << ",\"exposure_us\":" << json_number_or_null(exposure_ret, exposure_us)
+        << ",\"gev_scpd\":" << json_number_or_null(packet_delay_ret, packet_delay)
+        << ",\"gev_packet_size\":" << (packet_size_ret == MV_OK ? std::to_string(packet_size.nCurValue) : "null")
+        << ",\"frame_rate_enabled\":" << (rate_enabled_ret == MV_OK ? (rate_enabled ? "true" : "false") : "null")
+        << ",\"exposure_auto\":" << (exposure_auto_ret == MV_OK ? std::to_string(exposure_auto.nCurValue) : "null")
+        << "}\n";
+  }
+
   void close() {
     if (handle_) {
       if (grabbing_) MV_CC_StopGrabbing(handle_);
@@ -1052,6 +1140,14 @@ class MvsCapture {
   bool opened_{};
   bool grabbing_{};
   std::vector<unsigned char> bgr_;
+  std::string model_;
+  std::string serial_;
+  std::string monitor_path_;
+  double monitor_interval_sec_{2.0};
+  Clock::time_point next_monitor_{Clock::now()};
+  uint64_t frames_received_{0};
+  uint64_t read_failures_{0};
+  int last_error_{MV_OK};
 };
 
 class AsyncMvsCapture {

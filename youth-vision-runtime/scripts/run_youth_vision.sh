@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${ROOT:-/home/nx163/youth-vision-runtime}"
+ROOT="${ROOT:-/home/nx164/youth-vision-runtime}"
 CONFIG="${CONFIG:-$ROOT/configs/youth_pipeline.yaml}"
 MODE="${1:-image}"
 SOURCE="${2:-}"
@@ -10,6 +10,12 @@ if [[ "$MODE" != "image" && "$MODE" != "digit" ]]; then
   echo "mode must be image or digit" >&2
   exit 2
 fi
+
+session_id="${YOUTH_SESSION_ID:-manual_$(date +%Y%m%d_%H%M%S)}"
+camera_health_dir="$ROOT/logs/camera_health"
+mkdir -p "$camera_health_dir"
+export YOUTH_CAMERA_MONITOR_LOG="${YOUTH_CAMERA_MONITOR_LOG:-$camera_health_dir/camera_health_${session_id}.jsonl}"
+export YOUTH_CAMERA_MONITOR_INTERVAL_SEC=2
 
 echo "$MODE" > "$ROOT/configs/youth_runtime_mode.txt"
 

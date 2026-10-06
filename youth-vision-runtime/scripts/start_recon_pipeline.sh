@@ -9,6 +9,7 @@ FCU_URL="${FCU_URL:-udp://0.0.0.0:15001@192.168.144.14:15001}"
 CONFIG="${CONFIG:-$ROOT/configs/youth_pipeline.yaml}"
 RUN_DIR="$ROOT/run"
 LOG_DIR="$ROOT/logs/recon"
+CAMERA_HEALTH_DIR="$ROOT/logs/camera_health"
 
 if [[ "$MODE" != "digit" && "$MODE" != "image" ]]; then
   echo "usage: $0 [digit|image] [expected_targets]" >&2
@@ -26,13 +27,14 @@ for pid_file in "$RUN_DIR/recon_vision.pid" "$RUN_DIR/recon_ros.pid"; do
   fi
 done
 
-mkdir -p "$RUN_DIR" "$LOG_DIR" "$ROOT/logs/recognition" "$ROOT/recon_results/sessions"
+mkdir -p "$RUN_DIR" "$LOG_DIR" "$CAMERA_HEALTH_DIR" "$ROOT/logs/recognition" "$ROOT/recon_results/sessions"
 stamp="$(date +%Y%m%d_%H%M%S)"
 session_id="${stamp}_${MODE}_recon"
 result_dir="$ROOT/recon_results/sessions/$session_id"
 vision_log="$LOG_DIR/vision_${session_id}.log"
 ros_log="$LOG_DIR/ros_${session_id}.log"
 event_log="$ROOT/logs/recognition/recognition_events_${session_id}.jsonl"
+camera_monitor_log="$CAMERA_HEALTH_DIR/camera_health_${session_id}.jsonl"
 : > "$event_log"
 
 # RAW_CAPTURE_DEFAULT_0903_START
@@ -76,6 +78,8 @@ echo "startup_manifest_fence=armed path=$startup_manifest"
 setsid env \
   YOUTH_SESSION_ID="$session_id" \
   YOUTH_RECOGNITION_LOG="$event_log" \
+  YOUTH_CAMERA_MONITOR_LOG="$camera_monitor_log" \
+  YOUTH_CAMERA_MONITOR_INTERVAL_SEC=2 \
   LD_LIBRARY_PATH="/opt/MVS/lib/aarch64:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu/nvidia" \
   "$ROOT/native/build/youth_vision_runner" \
     "${vision_args[@]}" \
@@ -120,6 +124,7 @@ echo "mode=$MODE"
 echo "session_id=$session_id"
 echo "result_dir=$result_dir"
 echo "vision_log=$vision_log"
+echo "camera_monitor_log=$camera_monitor_log"
 echo "ros_log=$ros_log"
 echo "status_file=$result_dir/status.json"
 echo "confirmed_targets_file=$result_dir/confirmed_targets.json"

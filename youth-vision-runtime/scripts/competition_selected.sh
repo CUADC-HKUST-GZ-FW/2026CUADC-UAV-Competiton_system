@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${ROOT:-/home/nx163/youth-vision-runtime}"
-ROS_WS="${ROS_WS:-/home/nx163/uav_ros2_project}"
+ROOT="${ROOT:-/home/nx164/youth-vision-runtime}"
+ROS_WS="${ROS_WS:-/home/nx164/uav_ros2_project}"
 MODE="${1:-}"
 CONFIG="${CONFIG:-$ROOT/configs/youth_pipeline.yaml}"
 RUN_DIR="$ROOT/run"
@@ -28,7 +28,7 @@ mavros_count="$(pgrep -fc '/opt/ros/humble/lib/mavros/mavros_node' || true)"
 # Enable the native pre-overlay recorder for both startup branches. The saved
 # MP4 is made from untouched camera frames and is suitable for later labeling.
 if [[ "${YOUTH_SAVE_RAW_VIDEO:-1}" == "1" && -z "${YOUTH_RECORD_FILE:-}" ]]; then
-  raw_dir="${YOUTH_RAW_VIDEO_DIR:-/home/nx163/camera_recordings}"
+  raw_dir="${YOUTH_RAW_VIDEO_DIR:-/home/nx164/camera_recordings}"
   mkdir -p "$raw_dir"
   available_kb="$(df -Pk "$raw_dir" | awk 'NR==2 {print $4}')"
   if [[ -n "$available_kb" && "$available_kb" -ge "${YOUTH_RAW_MIN_FREE_KB:-2097152}" ]]; then
@@ -46,6 +46,8 @@ if (( mavros_count > 1 )); then
   echo "refusing to start: expected at most one MAVROS process, found $mavros_count" >&2
   exit 1
 fi
+
+mkdir -p "$ROOT/logs/camera_health"
 
 if (( mavros_count == 0 )); then
   "$ROOT/scripts/start_recon_pipeline.sh" "$MODE" 0
@@ -65,6 +67,7 @@ else
   vision_log="$LOG_DIR/vision_${session_id}.log"
   ros_log="$LOG_DIR/ros_${session_id}.log"
   event_log="$ROOT/logs/recognition/recognition_events_${session_id}.jsonl"
+  camera_monitor_log="$ROOT/logs/camera_health/camera_health_${session_id}.jsonl"
   echo "$MODE" > "$ROOT/configs/youth_runtime_mode.txt"
   ln -sfn "sessions/$session_id" "$ROOT/recon_results/latest"
 
@@ -84,6 +87,8 @@ else
   setsid env \
     YOUTH_SESSION_ID="$session_id" \
     YOUTH_RECOGNITION_LOG="$event_log" \
+    YOUTH_CAMERA_MONITOR_LOG="${YOUTH_CAMERA_MONITOR_LOG:-$camera_monitor_log}" \
+    YOUTH_CAMERA_MONITOR_INTERVAL_SEC=2 \
     LD_LIBRARY_PATH="/opt/MVS/lib/aarch64:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu/nvidia" \
     "$ROOT/native/build/youth_vision_runner" \
       "${vision_args[@]}" \
