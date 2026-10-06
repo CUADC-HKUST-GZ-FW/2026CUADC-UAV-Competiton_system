@@ -1,0 +1,99 @@
+{
+  "release_id": "20261007_pose_airport_alpha05",
+  "task": "pose_detection",
+  "class_count": 1,
+  "labels": [
+    "arrow"
+  ],
+  "keypoint_shape": [3, 3],
+  "keypoint_order": [
+    "tip",
+    "base_left",
+    "base_right"
+  ],
+  "input_shape": [1, 3, 768, 1024],
+  "output_shape": [1, 300, 15],
+  "source_weight": {
+    "file": "arrow_pose_3pt_airport1006_alpha05.pt",
+    "bytes": 5940626,
+    "sha256": "96fe5f9139a4d1ce7e5cafaaaeb81c2e14871df7cdbcafb4cfb755d61b11a4a1"
+  },
+  "onnx": {
+    "file": "arrow_pose_3pt_airport1006_alpha05.onnx",
+    "bytes": 10404424,
+    "sha256": "998e61ffe3d1ce6b50cbc6d83df328e2bd813d7aa392aa6d8a58deddc6206824",
+    "static_batch": 1,
+    "opset": 17,
+    "onnx_checker": "passed"
+  },
+  "training_lineage": {
+    "dataset": "detect_dataset_yolo_pose_airport_multisource_1006_nx163_balanced_v3",
+    "policy": "Pose26 head only; balanced same-domain replay; zero warmup; conservative augmentation",
+    "full_tuned_checkpoint": "pose_airport1006_nx163_balanced/weights/epoch3.pt",
+    "full_tuned_checkpoint_sha256": "a15947e2bd37300382a2a654d6bbd49a1aea5928fae1496d4b9e5f3bb7373e6b",
+    "interpolation_alpha": 0.05,
+    "interpolation_baseline_weight": 0.95,
+    "changed_scope": "model.23 only",
+    "changed_tensor_count": 261,
+    "operational_conf_threshold": 0.25,
+    "training_report_sha256": "d104b9c7269a55b5a901dc4a3511d3231b625e2193584c484770918e898cea74"
+  },
+  "offline_validation": {
+    "old_test_pose_map50": {
+      "baseline": 0.8642045454545454,
+      "candidate": 0.8642045454545454
+    },
+    "historical_contiguous_gap_hits": {
+      "baseline": "57/62",
+      "candidate": "57/62"
+    },
+    "nx164_airport_holdout": {
+      "positive_hits_baseline": "121/122",
+      "positive_hits_candidate": "121/122",
+      "negative_false_frames_baseline": "19/26",
+      "negative_false_frames_candidate": "19/26"
+    },
+    "nx163_124319_blind_holdout": {
+      "positive_operational_frames_baseline": 63,
+      "positive_operational_frames_candidate": 63,
+      "positive_windows_with_8_frame_packet_baseline": "3/3",
+      "positive_windows_with_8_frame_packet_candidate": "3/3",
+      "negative_false_frames_baseline": 19,
+      "negative_false_frames_candidate": 18,
+      "negative_longest_sampled_run_baseline": 3,
+      "negative_longest_sampled_run_candidate": 3
+    },
+    "reviewed_training_samples": {
+      "positive_hits_baseline": "78/80",
+      "positive_hits_candidate": "78/80",
+      "negative_false_frames_baseline": "32/38",
+      "negative_false_frames_candidate": "33/38"
+    },
+    "automated_screening_recommendation": "keep_20260930_baseline_due_to_marginal_and_unstable_negative_change"
+  },
+  "approval": {
+    "user_approved_for_release": true,
+    "approved_on": "2026-10-07",
+    "github_publication_requested": true,
+    "dual_jetson_deployment_validated": false
+  },
+  "previous_release_backup": {
+    "release_id": "20260930_pose_gap0930",
+    "weight": {
+      "file": "previous/arrow_pose_3pt_gap0930.pt",
+      "bytes": 5902510,
+      "sha256": "18be87c2383765ade18f8eaeb1612f86aa929ae1426092e5ef10e2465243ccef"
+    },
+    "onnx": {
+      "file": "previous/arrow_pose_3pt_gap0930.onnx",
+      "bytes": 10404424,
+      "sha256": "e1bcf80b15a3cc79fe847f67645d7b7d0fb6b7c674c749258cc11f39d4149f3f"
+    }
+  },
+  "device_builds": {
+    "nx163_engine_filename": "arrow_pose_3pt_airport1006_alpha05_fp16_opt3_nx163.engine",
+    "nx164_engine_filename": "arrow_pose_3pt_airport1006_alpha05_fp16_opt3_nx164.engine",
+    "rule": "Build each TensorRT engine on its target Jetson. Never copy an engine between devices."
+  },
+  "deployment_status": "approved_source_release_not_deployed"
+}

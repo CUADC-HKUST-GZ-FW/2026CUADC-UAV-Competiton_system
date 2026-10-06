@@ -2,7 +2,15 @@
 
 本目录默认不提交训练过程中的 `.pt`、`.onnx` 或 TensorRT `.engine`。经人工明确批准的当前源模型可以放入 `models/releases/`，并同时提交来源、验收状态和 SHA-256。设备相关 TensorRT `.engine` 始终不进入 Git。
 
-当前 Pose 源模型：
+用户最新批准的 Pose 源模型：
+
+- `releases/20261007_pose_airport_alpha05/arrow_pose_3pt_airport1006_alpha05.pt`
+- `releases/20261007_pose_airport_alpha05/arrow_pose_3pt_airport1006_alpha05.onnx`
+- 该版本是从 0930 基线向机场多源数据微调权重插值 5% 的 `alpha_05`；用户于 2026-10-07 明确决定采用。
+- 该版本已发布源权重，但尚未完成 NX163/NX164 各自 TensorRT 构建与全链路实机验收。两台设备必须分别生成带 `_nx163`、`_nx164` 后缀的 engine，禁止跨设备复制。
+- 同目录 `previous/` 保存发布前生产基线，可立即回退；`manifest.json` 保留自动筛选未推荐该候选的回归事实与人工采用决定。
+
+上一版已完成双机验收的 Pose 基线：
 
 - `releases/20260930_pose_gap0930/arrow_pose_3pt_gap0930.pt`
 - `releases/20260930_pose_gap0930/arrow_pose_3pt_gap0930.onnx`
