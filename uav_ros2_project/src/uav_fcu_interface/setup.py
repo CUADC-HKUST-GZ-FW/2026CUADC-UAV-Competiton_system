@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'fcu_interface_mavros_node = uav_fcu_interface.fcu_interface_mavros_node:main',
+            'rangefinder_monitor_node = uav_fcu_interface.rangefinder_monitor_node:main',
         ],
     },
 )

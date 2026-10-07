@@ -7,6 +7,7 @@ from launch.actions import (
     LogInfo,
     OpaqueFunction,
 )
+from launch.conditions import IfCondition
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
@@ -36,6 +37,18 @@ REAL_ONLY_ARGUMENT_DEFAULTS = {
     'dry_run': 'false',
     'enable_real_payload_release': 'true',
     'allow_mission_upload': 'true',
+
+    # Range-triggered rear servo. Disabled and dry-run by default.
+    'enable_rangefinder_rear_servo_monitor': 'false',
+    'rear_servo_dry_run': 'true',
+    'enable_real_rear_servo': 'false',
+    'rear_servo_channel': '8',
+    'rear_servo_trigger_distance_m': '0.15',
+    'rear_servo_confirm_count': '3',
+    'rear_servo_closed_pwm': '1000',
+    'rear_servo_open_pwm': '2000',
+    'rear_servo_range_timeout_s': '1.0',
+    'rear_servo_require_penultimate_waypoint_gate': 'true',
 
     # Mission service controls currently configured only by REAL.
     'service_availability_timeout_sec': '2.0',
@@ -90,6 +103,11 @@ def _log_real_profile(context):
             'dry_run',
             'allow_mission_upload',
             'enable_real_payload_release',
+            'enable_rangefinder_rear_servo_monitor',
+            'rear_servo_dry_run',
+            'enable_real_rear_servo',
+            'rear_servo_channel',
+            'rear_servo_require_penultimate_waypoint_gate',
         )
     }
 
@@ -107,6 +125,17 @@ def _log_real_profile(context):
             msg=(
                 'enable_real_payload_release: '
                 + values['enable_real_payload_release']
+            )
+        ),
+        LogInfo(
+            msg=(
+                'rear_servo: monitor='
+                + values['enable_rangefinder_rear_servo_monitor']
+                + ' dry_run=' + values['rear_servo_dry_run']
+                + ' real_enabled=' + values['enable_real_rear_servo']
+                + ' channel=' + values['rear_servo_channel']
+                + ' penultimate_gate='
+                + values['rear_servo_require_penultimate_waypoint_gate']
             )
         ),
         LogInfo(
@@ -213,6 +242,28 @@ def generate_launch_description():
     }
 
     # ========================================================================
+    # Rangefinder / rear-servo parameters
+    # ========================================================================
+    rangefinder_monitor_parameters = {
+        'use_sim_time': use_sim_time,
+        'topic': '/mavros/rangefinder_pub',
+        'minimum_valid_range_m': 0.0,
+        'timeout_sec': real_only['rear_servo_range_timeout_s'],
+        'rear_servo_trigger_distance_m': real_only[
+            'rear_servo_trigger_distance_m'
+        ],
+        'rear_servo_confirm_count': real_only['rear_servo_confirm_count'],
+        'rear_servo_closed_pwm': real_only['rear_servo_closed_pwm'],
+        'rear_servo_open_pwm': real_only['rear_servo_open_pwm'],
+        'rear_servo_channel': real_only['rear_servo_channel'],
+        'dry_run': real_only['rear_servo_dry_run'],
+        'enable_real_rear_servo': real_only['enable_real_rear_servo'],
+        'require_penultimate_waypoint_gate': real_only[
+            'rear_servo_require_penultimate_waypoint_gate'
+        ],
+    }
+
+    # ========================================================================
     # Unified Logging
     # ========================================================================
     manifest_fields = {
@@ -226,6 +277,7 @@ def generate_launch_description():
         **_prefixed('fcu', fcu_parameters),
         **_prefixed('mission_manager', mission_manager_parameters),
         **_prefixed('payload_monitor', payload_monitor_parameters),
+        **_prefixed('rangefinder_monitor', rangefinder_monitor_parameters),
     }
 
     logging_setup = create_logging_setup('REAL', manifest_fields)
@@ -248,7 +300,6 @@ def generate_launch_description():
             'tgt_component': target_component_id,
         }.items(),
     )
-
     # ========================================================================
     # Nodes
     # ========================================================================
@@ -277,6 +328,18 @@ def generate_launch_description():
         output='both',
         on_exit=[LogInfo(msg='[REAL FLIGHT PROFILE] PayloadMonitor exited')],
         parameters=[payload_monitor_config, payload_monitor_parameters],
+    )
+
+    rangefinder_monitor = Node(
+        package='uav_fcu_interface',
+        executable='rangefinder_monitor_node',
+        name='rangefinder_monitor',
+        output='both',
+        condition=IfCondition(
+            real_only['enable_rangefinder_rear_servo_monitor']
+        ),
+        on_exit=[LogInfo(msg='[REAL FLIGHT PROFILE] RangefinderMonitor exited')],
+        parameters=[rangefinder_monitor_parameters],
     )
 
     flight_summary_logger = Node(
@@ -318,6 +381,7 @@ def generate_launch_description():
             fcu_interface,
             mission_manager,
             payload_monitor,
+            rangefinder_monitor,
             flight_summary_logger,
         ]
     )
