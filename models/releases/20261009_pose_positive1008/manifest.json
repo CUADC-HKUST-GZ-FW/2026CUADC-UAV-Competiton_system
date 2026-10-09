@@ -1,0 +1,104 @@
+{
+  "release_id": "20261009_pose_positive1008",
+  "task": "pose_detection",
+  "class_count": 1,
+  "labels": [
+    "arrow"
+  ],
+  "keypoint_shape": [3, 3],
+  "keypoint_order": [
+    "tip",
+    "base_left",
+    "base_right"
+  ],
+  "input_shape": [1, 3, 768, 1024],
+  "output_shape": [1, 300, 15],
+  "source_weight": {
+    "file": "arrow_pose_3pt_positive1008.pt",
+    "bytes": 5902190,
+    "sha256": "00cc6cb0080950ec4c44488e80c75d52e79f50d9b2726bfb0807282ad34266d1"
+  },
+  "onnx": {
+    "file": "arrow_pose_3pt_positive1008.onnx",
+    "bytes": 10455223,
+    "sha256": "c3a795cf8ca3dd5c15fdc8e07760add26e3030052a0b0be35ec0114d94be4d5f",
+    "static_batch": 1,
+    "opset": 17,
+    "onnx_checker": "passed",
+    "pt_onnx_smoke_images": 4,
+    "pt_onnx_max_score_delta": 8.344650268554688e-7
+  },
+  "training_lineage": {
+    "baseline_release": "20260930_pose_gap0930",
+    "dataset": "detect_dataset_yolo_pose_airport_fullframe_positive_1008_v2",
+    "dataset_train_val_test": [3263, 182, 183],
+    "new_reviewed_frames": 156,
+    "new_positive_frames": 136,
+    "new_negative_frames": 20,
+    "new_arrow_instances": 158,
+    "policy": "Freeze the first 10 layers for 3 epochs, then low-learning-rate full-model tuning for 10 epochs with reviewed full-frame positives and hard-negative replay.",
+    "training_run": "pose_airport_fullframe_positive_1008/20261008_234318",
+    "annotation_sha256": "759c0a603f270e34618c77531cb72284b8a49035aa08d1e215dbafddef42c444",
+    "training_report_sha256": "167d95d17d6042d01f97a49caff49dbf711c71578e96f09a091055cbcf762c45"
+  },
+  "offline_validation": {
+    "new_fullframe_positive_hits": "116/136",
+    "new_fullframe_instance_hits": "123/158",
+    "old_blind_positive_frame_hits": "7/8",
+    "old_blind_instance_hits": "7/9",
+    "old_hardnegative_false_frames": "47/128",
+    "old_hardnegative_holdout_false_frames": 17,
+    "historical_pose_map50": 0.9840990813421572,
+    "video_windows": {
+      "window_count": 75,
+      "target_pattern_count": 37,
+      "non_target_count": 36,
+      "target_empty_count": 2,
+      "threshold_8": {
+        "target_pattern": "37/37",
+        "non_target_false_packets": "4/36",
+        "target_empty": "2/2"
+      },
+      "threshold_12": {
+        "target_pattern": "34/37",
+        "non_target_false_packets": "3/36",
+        "target_empty": "2/2"
+      },
+      "threshold_16": {
+        "target_pattern": "32/37",
+        "non_target_false_packets": "1/36",
+        "target_empty": "2/2"
+      }
+    }
+  },
+  "known_followup": {
+    "active_learning_round": "20261009_pose_active_learning",
+    "result": "Later candidates improved difficult single-frame recall but increased 8-frame non-target packets from 4/36 to at least 6/36; positive1008 remained the safest 8-frame reference.",
+    "latest_candidate_deployed": false
+  },
+  "approval": {
+    "user_approved_for_release": true,
+    "approved_on": "2026-10-09",
+    "github_publication_requested": true,
+    "dual_jetson_deployment_validated": false
+  },
+  "previous_release_backup": {
+    "release_id": "20261007_pose_airport_alpha05",
+    "weight": {
+      "file": "previous/arrow_pose_3pt_airport1006_alpha05.pt",
+      "bytes": 5940626,
+      "sha256": "96fe5f9139a4d1ce7e5cafaaaeb81c2e14871df7cdbcafb4cfb755d61b11a4a1"
+    },
+    "onnx": {
+      "file": "previous/arrow_pose_3pt_airport1006_alpha05.onnx",
+      "bytes": 10404424,
+      "sha256": "998e61ffe3d1ce6b50cbc6d83df328e2bd813d7aa392aa6d8a58deddc6206824"
+    }
+  },
+  "device_builds": {
+    "nx163_engine_filename": "arrow_pose_3pt_positive1008_fp16_opt3_nx163.engine",
+    "nx164_engine_filename": "arrow_pose_3pt_positive1008_fp16_opt3_nx164.engine",
+    "rule": "Build each TensorRT engine on its target Jetson. Never copy an engine between devices."
+  },
+  "deployment_status": "approved_source_release_not_deployed"
+}

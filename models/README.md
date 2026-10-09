@@ -4,6 +4,14 @@
 
 用户最新批准的 Pose 源模型：
 
+- `releases/20261009_pose_positive1008/arrow_pose_3pt_positive1008.pt`
+- `releases/20261009_pose_positive1008/arrow_pose_3pt_positive1008.onnx`
+- 该版本在 75 段全帧率窗口的 8 帧门槛下达到 `37/37` 真标靶和 `4/36` 非标靶误包，优于此前发布的 `alpha_05` 的 `33/37` 与 `14/36`。
+- 同目录 `previous/` 保存发布前的 `alpha_05` PT/ONNX；`manifest.json` 记录训练来源、回归、哈希和 10 月 9 日后续主动学习的已知取舍。
+- 该版本已获准上传 GitHub，但尚未完成 NX163/NX164 各自 TensorRT 构建与全链路实机验收。两台设备必须分别生成带 `_nx163`、`_nx164` 后缀的 engine，禁止跨设备复制。
+
+上一份 GitHub Pose 发布：
+
 - `releases/20261007_pose_airport_alpha05/arrow_pose_3pt_airport1006_alpha05.pt`
 - `releases/20261007_pose_airport_alpha05/arrow_pose_3pt_airport1006_alpha05.onnx`
 - 该版本是从 0930 基线向机场多源数据微调权重插值 5% 的 `alpha_05`；用户于 2026-10-07 明确决定采用。
