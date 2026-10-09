@@ -1,0 +1,110 @@
+{
+  "release_id": "20261009_classification_shadow1007_round2",
+  "published_on": "2026-10-09",
+  "input_shape": [1, 3, 128, 128],
+  "onnx_opset": 17,
+  "models": {
+    "digit": {
+      "task": "digit_classification",
+      "class_count": 101,
+      "labels": "indices 0-99 map to 00-99; index 100 maps to empty",
+      "runtime_label_source": "youth-vision-runtime/configs/youth_classes_digit.txt",
+      "selected_checkpoint": "best.pt",
+      "pytorch": {
+        "file": "digit_cls_shadow1007_round2_candidate.pt",
+        "bytes": 3440386,
+        "sha256": "c600ab54e954c4212270aa0a4ccd458f050cdb67672da70839c83b16ee574426"
+      },
+      "onnx": {
+        "file": "digit_cls_shadow1007_round2_candidate.onnx",
+        "bytes": 6651407,
+        "sha256": "2e929b5243ea992db83dddbca4baa9627618b46f5c729b0c9142bea7cd0df15b",
+        "output_shape": [1, 101],
+        "checker": "passed"
+      },
+      "export_validation": {
+        "random_samples": 8,
+        "argmax_match": "8/8",
+        "max_abs_diff": 1.1920928955078125e-7
+      },
+      "offline_regression": {
+        "clear_original": "808/808",
+        "independent_deep_shadow": "788/808",
+        "focus_errors_clear": 0,
+        "focus_errors_shadow": 0
+      },
+      "training_dataset": "num_cls_dataset_large101_1007_shadow_round2_v2",
+      "seed_weight_sha256": "f43ad1b1f67714fe8bcd9efeab92e05a374a3419a5893078fbc7a8cc764aed14"
+    },
+    "image": {
+      "task": "image_classification",
+      "class_count": 13,
+      "labels": [
+        "侦察机",
+        "卡车",
+        "固定翼",
+        "坦克",
+        "多旋翼",
+        "战斗机",
+        "机枪兵",
+        "火箭兵",
+        "直升机",
+        "轰炸机",
+        "运输机",
+        "防空炮",
+        "empty"
+      ],
+      "runtime_label_source": "youth-vision-runtime/configs/youth_classes_image.txt",
+      "embedded_checkpoint_label_12": "historical encoding error; runtime label index 12 is empty",
+      "selected_checkpoint": "epoch0.pt with optimizer state stripped",
+      "pytorch": {
+        "file": "image_cls_shadow1007_round2_candidate.pt",
+        "bytes": 3233239,
+        "sha256": "2279e103a7de80c8d5d1bc9f4ea9a03102fe776789549be6830922c0daea9943"
+      },
+      "onnx": {
+        "file": "image_cls_shadow1007_round2_candidate.onnx",
+        "bytes": 6199714,
+        "sha256": "380a79c9d39c338a393f6f9bb49da0ac59a6aa9fddc39755e4cd887eb5e6a9c4",
+        "output_shape": [1, 13],
+        "checker": "passed"
+      },
+      "export_validation": {
+        "random_samples": 8,
+        "argmax_match": "8/8",
+        "max_abs_diff": 2.4868995751603507e-14
+      },
+      "offline_regression": {
+        "clear_original": "208/208",
+        "independent_deep_shadow": "207/208",
+        "focus_errors_clear": 0,
+        "focus_errors_shadow": 0
+      },
+      "training_dataset": "image_target_dataset_zigong_shadow_round2_balanced13_1007_v2",
+      "seed_weight_sha256": "8c201426ff74942873fb615cfb67dd4d99f9f513449e374ad043634ea36a4a6f"
+    }
+  },
+  "training_lineage": {
+    "training_state_sha256": "9295925d01e87941ed324e3eba03dd37e0d47a0f1ca61e53c3f1c0819111152a",
+    "candidate_regression_sha256": "b67aeb6e20597a5faa24d58cd88376618d9dc2ae2efc2fd6e48e3d6b859a2c69",
+    "package_verification_sha256": "781d7c9985b98c724fed0e5bd56e00eea4b199b94476f7f58cf3a18c30957655"
+  },
+  "previous_releases_preserved": {
+    "digit": "20261004_digit_large101_v4_conservative",
+    "image_production": "20261004_image_zigong_airport_domain",
+    "image_candidate": "20261006_image_tanktruck_candidate"
+  },
+  "approval": {
+    "approved_for_github_release": true,
+    "approved_for_jetson_deployment": false,
+    "note": "User requested publication of both latest local classification models on 2026-10-09; no device deployment was requested."
+  },
+  "device_builds": {
+    "nx163_digit": "digit_cls_shadow1007_round2_candidate_fp16_nx163.engine",
+    "nx164_digit": "digit_cls_shadow1007_round2_candidate_fp16_nx164.engine",
+    "nx163_image": "image_cls_shadow1007_round2_candidate_fp16_nx163.engine",
+    "nx164_image": "image_cls_shadow1007_round2_candidate_fp16_nx164.engine",
+    "rule": "Build every TensorRT engine on its target Jetson. Never copy an engine between NX163 and NX164."
+  },
+  "deployment_status": "github_candidate_release_not_deployed"
+}
