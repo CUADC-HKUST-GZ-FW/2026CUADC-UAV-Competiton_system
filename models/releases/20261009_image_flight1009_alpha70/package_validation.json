@@ -1,0 +1,17 @@
+{
+  "source": "C:\\Users\\ytxia\\Desktop\\YOUTH_YOLOv26training\\runs\\classification_flight1009_confusions\\20261009_220456\\candidate_package_not_deployed\\image_flight1009_selected_candidate.pt",
+  "source_sha256": "cf5154a3a1c658b31f22fc9bf5e1eeb6a2dc69102c315dcef66c4ef4af1278d4",
+  "pytorch": {
+    "file": "image_cls_flight1009_alpha70.pt",
+    "bytes": 3232122,
+    "sha256": "78d53c7303ca21c5918cfe611978bf40b392f7af3b622eeb793245167da57c93"
+  },
+  "onnx": {
+    "file": "image_cls_flight1009_alpha70.onnx",
+    "bytes": 6199710,
+    "sha256": "44be0d5fd7330eb05e2284fbed1001f3f1468a82008bc2d253b9179f5ba72c86"
+  },
+  "onnx_checker": "passed",
+  "random_argmax_match": "8/8",
+  "max_abs_diff": 3.2514435588382185e-11
+}

@@ -38,6 +38,13 @@
 - `releases/20261006_image_tanktruck_candidate/image_zigong_tanktruck_1006_candidate.onnx`
 - 该候选修复了现有截图中的坦克到卡车误判并通过历史回归，但截图参与了训练，仍需独立的新坦克/卡车视频验收；在此之前当前生产模型仍为 1004 版本，不得直接部署候选。
 
+用户最新批准的图案分类源模型：
+
+- `releases/20261009_image_flight1009_alpha70/image_cls_flight1009_alpha70.pt`
+- `releases/20261009_image_flight1009_alpha70/image_cls_flight1009_alpha70.onnx`
+- 该版本针对 10 月 9 日实飞中的多旋翼到运输机、轰炸机到防空炮混淆进行保守修复；历史验证为 `3118/3120`，独立实飞测试由 1006 基线的 `65/96` 提升到 `88/96`。
+- 用户已批准采用和发布。NX163/NX164 尚需分别在本机生成各自 engine 并完成无桨及全链路验收；1006、1007 历史版本完整保留。
+
 当前数字分类源模型：
 
 - `releases/20261004_digit_large101_v4_conservative/digit_cls_large101_1003_v4_conservative_best.pt`

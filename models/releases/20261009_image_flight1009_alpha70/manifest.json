@@ -1,0 +1,102 @@
+{
+  "release_id": "20261009_image_flight1009_alpha70",
+  "published_on": "2026-10-09",
+  "task": "image_classification",
+  "class_count": 13,
+  "labels": [
+    "侦察机",
+    "卡车",
+    "固定翼",
+    "坦克",
+    "多旋翼",
+    "战斗机",
+    "机枪兵",
+    "火箭兵",
+    "直升机",
+    "轰炸机",
+    "运输机",
+    "防空炮",
+    "empty"
+  ],
+  "runtime_label_source": "youth-vision-runtime/configs/youth_classes_image.txt",
+  "input_shape": [1, 3, 128, 128],
+  "onnx_opset": 17,
+  "selection": {
+    "method": "weight interpolation",
+    "alpha_tuned": 0.7,
+    "alpha_baseline": 0.3,
+    "source_checkpoint_sha256": "cf5154a3a1c658b31f22fc9bf5e1eeb6a2dc69102c315dcef66c4ef4af1278d4",
+    "baseline_release": "20261006_image_tanktruck_candidate",
+    "baseline_sha256": "15543e62323f308c8865da88e955e11e37b8ec72af4c7fedf4ecaa94b7819a5d",
+    "tuned_epoch1_sha256": "5024e793fcdfad8f13b1db0674bffa93d96548fa09a2023a613d24e5638e6cb8"
+  },
+  "artifacts": {
+    "pytorch": {
+      "file": "image_cls_flight1009_alpha70.pt",
+      "bytes": 3232122,
+      "sha256": "78d53c7303ca21c5918cfe611978bf40b392f7af3b622eeb793245167da57c93"
+    },
+    "onnx": {
+      "file": "image_cls_flight1009_alpha70.onnx",
+      "bytes": 6199710,
+      "sha256": "44be0d5fd7330eb05e2284fbed1001f3f1468a82008bc2d253b9179f5ba72c86",
+      "checker": "passed",
+      "random_argmax_match": "8/8",
+      "max_abs_diff": 3.2514435588382185e-11
+    }
+  },
+  "dataset": {
+    "name": "image_target_dataset_flight1009_confusions_balanced13_v1",
+    "train_per_class": 2000,
+    "val_per_class": 240,
+    "replacements": {
+      "多旋翼": 200,
+      "轰炸机": 160,
+      "固定翼": 80
+    },
+    "train_flights": ["nx163 143901", "nx164 145311"],
+    "validation_flight": "nx164 145912",
+    "test_flight": "nx164 152116"
+  },
+  "offline_regression": {
+    "selection_policy": "selection used historical validation and flight validation only; flight test was read after selection",
+    "baseline1006": {
+      "legacy_val": "3119/3120",
+      "flight_val": "44/88",
+      "flight_test": "65/96",
+      "manual_test": "7/11"
+    },
+    "alpha70": {
+      "legacy_val": "3118/3120",
+      "flight_val": "69/88",
+      "flight_test": "88/96",
+      "manual_test": "9/11",
+      "flight_test_multirotor": "22/27",
+      "flight_test_bomber": "33/34",
+      "flight_test_fixedwing": "33/35"
+    }
+  },
+  "lineage_sha256": {
+    "classification_regression": "85d06373a6a2637a15f1053f0215c7c4cd90835ac27fc78d1f3d788ac668a785",
+    "classification_dataset_summary": "067fac2032dfd61d9afd8e9a7ce97f62bfbb06cce6cafd256b88b2dc22946f44",
+    "package_validation": "a3871af8e93e2c7c1738778491b7b6e13e005d73dbbe58be8fb681c0f5554ecf"
+  },
+  "previous_releases_preserved": [
+    "20261006_image_tanktruck_candidate",
+    "20261009_classification_shadow1007_round2",
+    "20261004_image_zigong_airport_domain"
+  ],
+  "approval": {
+    "approved_for_github_release": true,
+    "approved_for_jetson_deployment": true,
+    "approved_by_user_on": "2026-10-09",
+    "device_validation_pending": true
+  },
+  "device_builds": {
+    "nx163": "image_cls_flight1009_alpha70_fp16_nx163.engine",
+    "nx164": "image_cls_flight1009_alpha70_fp16_nx164.engine",
+    "rule": "Build each TensorRT engine on its target Jetson; never copy an engine between NX163 and NX164."
+  },
+  "deployment_status": "github_release_approved_device_deployment_pending"
+}
+
