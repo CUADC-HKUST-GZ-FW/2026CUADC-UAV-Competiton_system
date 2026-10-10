@@ -1,0 +1,88 @@
+{
+  "release_id": "20261010_pose_umbrella1009_alpha30",
+  "task": "pose_detection",
+  "class_count": 1,
+  "labels": ["arrow"],
+  "keypoint_shape": [3, 3],
+  "keypoint_order": ["tip", "base_left", "base_right"],
+  "input_shape": [1, 3, 768, 1024],
+  "output_shape": [1, 300, 15],
+  "source_weight": {
+    "file": "arrow_pose_3pt_umbrella1009_alpha30.pt",
+    "bytes": 5964501,
+    "sha256": "6c367b056f44a5975962be960fad445318a7a8044bad584b40f91184209b389d"
+  },
+  "onnx": {
+    "file": "arrow_pose_3pt_umbrella1009_alpha30.onnx",
+    "bytes": 10404447,
+    "sha256": "da95e8e81b18a49ba04789f4eef1b91ea1363841c5b3b5af861cfdd844168019",
+    "static_batch": 1,
+    "opset": 17,
+    "onnx_checker": "passed",
+    "pt_onnx_smoke_images": 4,
+    "pt_onnx_max_top_score_delta": 3.026798367500305e-8
+  },
+  "training_lineage": {
+    "baseline_release": "20261009_pose_positive1008",
+    "baseline_sha256": "00cc6cb0080950ec4c44488e80c75d52e79f50d9b2726bfb0807282ad34266d1",
+    "dataset": "detect_dataset_yolo_pose_airport_umbrella1009_v5",
+    "dataset_train_val_test": [3589, 210, 231],
+    "new_fullframe_negative_images": 31,
+    "new_photometric_negative_images": 62,
+    "positive_recall_protection_images": 40,
+    "training_run": "pose_umbrella_hardnegative_1009/20261009_222922",
+    "full_finetune": "freeze first 10 layers, lr0=3e-6, 5 epochs",
+    "selection": "0.30 interpolation from positive1008 to the full hard-negative best checkpoint",
+    "selected_source_sha256": "94dcad739ab1b137c4d2cd0c17ed0e150224d7825b424faae07b7cd473169208",
+    "dataset_summary_sha256": "de93d179c788c0d92b59cf591cce8a13491779779dd5108551cece42dd8cbe8d"
+  },
+  "offline_validation": {
+    "flight1009_target_packets_threshold_8": "19/19",
+    "flight1009_umbrella_longest_runs_baseline": [7, 5, 12],
+    "flight1009_umbrella_longest_runs_candidate": [6, 5, 10],
+    "historical_window_count": 75,
+    "threshold_8": {
+      "target_pattern": "37/37",
+      "non_target_false_packets": "4/36",
+      "target_empty": "2/2"
+    },
+    "threshold_12": {
+      "target_pattern": "34/37",
+      "non_target_false_packets": "3/36",
+      "target_empty": "2/2"
+    },
+    "threshold_16": {
+      "target_pattern": "32/37",
+      "non_target_false_packets": "1/36",
+      "target_empty": "2/2"
+    }
+  },
+  "operational_gate": {
+    "recommended_contiguous_frames": 12,
+    "threshold_8": "rejected: the independent umbrella holdout has a 10-frame false run",
+    "threshold_12": "recommended: blocks all three reviewed umbrella runs while retaining 34/37 historical target-pattern windows",
+    "threshold_16": "supported but not preferred: lowers historical target-pattern coverage to 32/37"
+  },
+  "approval": {
+    "user_approved_for_github_release": true,
+    "approved_on": "2026-10-10",
+    "dual_jetson_deployment_validated": false
+  },
+  "previous_release_backup": {
+    "release_id": "20261009_pose_positive1008",
+    "weight": {
+      "file": "previous/arrow_pose_3pt_positive1008.pt",
+      "sha256": "00cc6cb0080950ec4c44488e80c75d52e79f50d9b2726bfb0807282ad34266d1"
+    },
+    "onnx": {
+      "file": "previous/arrow_pose_3pt_positive1008.onnx",
+      "sha256": "c3a795cf8ca3dd5c15fdc8e07760add26e3030052a0b0be35ec0114d94be4d5f"
+    }
+  },
+  "device_builds": {
+    "nx163_engine_filename": "arrow_pose_3pt_umbrella1009_alpha30_fp16_opt3_nx163.engine",
+    "nx164_engine_filename": "arrow_pose_3pt_umbrella1009_alpha30_fp16_opt3_nx164.engine",
+    "rule": "Build each TensorRT engine on its target Jetson. Never copy an engine between devices."
+  },
+  "deployment_status": "approved_source_release_not_deployed"
+}

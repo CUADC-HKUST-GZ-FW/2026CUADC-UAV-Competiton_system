@@ -1,0 +1,33 @@
+{
+  "source": "C:\\Users\\ytxia\\Desktop\\YOUTH_YOLOv26training\\runs\\pose_umbrella_hardnegative_1009\\20261009_222922\\candidate_package_not_deployed\\arrow_pose_3pt_umbrella1009_conservative_selected_not_deployed.pt",
+  "source_sha256": "94dcad739ab1b137c4d2cd0c17ed0e150224d7825b424faae07b7cd473169208",
+  "pytorch": {
+    "file": "arrow_pose_3pt_umbrella1009_alpha30.pt",
+    "bytes": 5964501,
+    "sha256": "6c367b056f44a5975962be960fad445318a7a8044bad584b40f91184209b389d"
+  },
+  "onnx": {
+    "file": "arrow_pose_3pt_umbrella1009_alpha30.onnx",
+    "bytes": 10404447,
+    "sha256": "da95e8e81b18a49ba04789f4eef1b91ea1363841c5b3b5af861cfdd844168019",
+    "input_shape": [
+      1,
+      3,
+      768,
+      1024
+    ],
+    "output_shape": [
+      1,
+      300,
+      15
+    ],
+    "opset": 17
+  },
+  "onnx_checker": "passed",
+  "pt_onnx_smoke_images": 4,
+  "pt_onnx_max_top_score_delta": 3.026798367500305e-08,
+  "previous": {
+    "pytorch_sha256": "00cc6cb0080950ec4c44488e80c75d52e79f50d9b2726bfb0807282ad34266d1",
+    "onnx_sha256": "c3a795cf8ca3dd5c15fdc8e07760add26e3030052a0b0be35ec0114d94be4d5f"
+  }
+}

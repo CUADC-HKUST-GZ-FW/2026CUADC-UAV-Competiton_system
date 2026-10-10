@@ -4,6 +4,14 @@
 
 用户最新批准的 Pose 源模型：
 
+- `releases/20261010_pose_umbrella1009_alpha30/arrow_pose_3pt_umbrella1009_alpha30.pt`
+- `releases/20261010_pose_umbrella1009_alpha30/arrow_pose_3pt_umbrella1009_alpha30.onnx`
+- 该版本针对 10 月 9 日蓝伞稳定错检加入完整帧困难负样本，并以 `alpha=0.30` 保守插值保护历史召回；蓝伞最长连续误检由 `7/5/12` 降为 `6/5/10` 帧。
+- 推荐连续帧门槛为 **12 帧**：8 帧仍会放过 10 帧蓝伞误检，16 帧则会比 12 帧少保留 2 个历史真图案标靶包。
+- 同目录 `previous/` 保存 `positive1008` PT/ONNX。该版本已获准上传 GitHub，但尚未完成 NX163/NX164 各自 TensorRT 构建与全链路实机验收。
+
+上一份 GitHub Pose 发布：
+
 - `releases/20261009_pose_positive1008/arrow_pose_3pt_positive1008.pt`
 - `releases/20261009_pose_positive1008/arrow_pose_3pt_positive1008.onnx`
 - 该版本在 75 段全帧率窗口的 8 帧门槛下达到 `37/37` 真标靶和 `4/36` 非标靶误包，优于此前发布的 `alpha_05` 的 `33/37` 与 `14/36`。
