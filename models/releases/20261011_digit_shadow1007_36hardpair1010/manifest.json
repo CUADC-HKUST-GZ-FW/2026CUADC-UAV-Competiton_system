@@ -1,0 +1,95 @@
+{
+  "release_id": "20261011_digit_shadow1007_36hardpair1010",
+  "published_on": "2026-10-11",
+  "task": "digit_classification",
+  "class_count": 101,
+  "labels": "indices 0-99 map to 00-99; index 100 maps to empty",
+  "runtime_label_source": "youth-vision-runtime/configs/youth_classes_digit.txt",
+  "input_shape": [1, 3, 128, 128],
+  "pytorch": {
+    "file": "digit_cls_shadow1007_36hardpair1010.pt",
+    "bytes": 3459437,
+    "sha256": "9884ef11b4b49eb47df6dcc7538da4984cc8d6c0c6c5d65befa34935cb7d0f32"
+  },
+  "onnx": {
+    "file": "digit_cls_shadow1007_36hardpair1010.onnx",
+    "bytes": 6651397,
+    "sha256": "0d860b9e5dea168db76239244ab7e676c4d6365565c53ea5390a38bb62aa2664",
+    "opset": 17,
+    "output_shape": [1, 101],
+    "checker": "passed"
+  },
+  "export_validation": {
+    "random_argmax_match": "8/8",
+    "flight1010_argmax_match": "30/30",
+    "max_abs_diff": 2.384185791015625e-7,
+    "details": "package_validation.json"
+  },
+  "training_lineage": {
+    "baseline_release": "20261009_classification_shadow1007_round2",
+    "baseline_sha256": "c600ab54e954c4212270aa0a4ccd458f050cdb67672da70839c83b16ee574426",
+    "training_dataset": "num_cls_dataset_digit36_flight1010_v2",
+    "dataset_base": "num_cls_dataset_large101_1007_shadow_round2_v2",
+    "dataset_train_val": [48480, 5050],
+    "focus_replacements": {
+      "36": 102,
+      "38": 102
+    },
+    "selected_checkpoint": "epoch1.pt",
+    "selected_source_sha256": "1a9783f927c9a294fb33b81b0cbcf5380afdbe61cb252e57160f2ee0a24f2c79",
+    "training": "3 epochs, AdamW, lr0=2e-6, full 101-class rehearsal",
+    "dataset_manifest_sha256": "13594f32a7e931fb24d45cfe613bbb15bba770a2410b081b8a11aa87dac3c85b",
+    "training_state_sha256": "7c710235631ed46b8865c6c7b5e50fc706a5823321df367f6a2ee2028cd48dc9",
+    "candidate_evaluation_sha256": "2f1d38dfaa3a21dc11c412b12998370df8ef6001b362dc20d37b14d2d01c2623"
+  },
+  "offline_regression": {
+    "flight1010_true36": {
+      "baseline": "14/30",
+      "candidate": "27/30",
+      "residual_errors": "3 frames predicted as 38"
+    },
+    "latest_101class_validation": {
+      "baseline": "5048/5050",
+      "candidate": "5048/5050"
+    },
+    "true38_validation": {
+      "baseline": "50/50",
+      "candidate": "50/50",
+      "new_38_to_36": 0
+    },
+    "independent_deep_shadow": {
+      "baseline": "788/808",
+      "candidate": "789/808"
+    },
+    "flight68": "47/48 -> 47/48",
+    "flight75": "45/45 -> 45/45",
+    "nx164_oracle": "24/31 -> 24/31",
+    "nx164_pose": "19/26 -> 19/26",
+    "nx163_0922_reference": "81/91 -> 82/91",
+    "0829_lowlight": "19/22 -> 19/22",
+    "0911_gold": "9/9 -> 9/9",
+    "acceptance_gates": "14/14 passed"
+  },
+  "previous_release_backup": {
+    "release_id": "20261009_classification_shadow1007_round2",
+    "pytorch": {
+      "file": "previous/digit_cls_shadow1007_round2_candidate.pt",
+      "sha256": "c600ab54e954c4212270aa0a4ccd458f050cdb67672da70839c83b16ee574426"
+    },
+    "onnx": {
+      "file": "previous/digit_cls_shadow1007_round2_candidate.onnx",
+      "sha256": "2e929b5243ea992db83dddbca4baa9627618b46f5c729b0c9142bea7cd0df15b"
+    }
+  },
+  "device_builds": {
+    "nx163_engine_filename": "digit_cls_shadow1007_36hardpair1010_fp16_nx163.engine",
+    "nx164_engine_filename": "digit_cls_shadow1007_36hardpair1010_fp16_nx164.engine",
+    "rule": "Build each TensorRT engine on its target Jetson. Never copy an engine between devices."
+  },
+  "approval": {
+    "user_approved_for_github_release": true,
+    "approved_on": "2026-10-11",
+    "dual_jetson_deployment_validated": false
+  },
+  "deployment_status": "approved_source_release_not_deployed"
+}
